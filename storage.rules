@@ -1,0 +1,18 @@
+rules_version = '2';
+// Requires Cloud Storage (Blaze plan) and the Firestore cross-service permission the CLI asks for on first deploy.
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /assets/{file} {
+      function email() { return request.auth.token.email.lower(); }
+      function isOwner() { return email() in ['digitalmarketing01@delishfoods.co.th']; }
+      function role() {
+        return firestore.exists(/databases/(default)/documents/members/$(email()))
+          ? firestore.get(/databases/(default)/documents/members/$(email())).data.role : '';
+      }
+      allow read: if request.auth != null && (isOwner() || role() in ['viewer', 'contributor', 'editor']);
+      allow create: if request.auth != null && (isOwner() || role() in ['contributor', 'editor'])
+        && request.resource.size < 20 * 1024 * 1024;
+      allow update, delete: if request.auth != null && (isOwner() || role() == 'editor');
+    }
+  }
+}
