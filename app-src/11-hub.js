@@ -90,3 +90,124 @@ const _dashBase=VIEWS.dash;VIEWS.dash=()=>{_dashBase();const k=$("#v-dash .kpis"
   const reach=FPLAT.concat(["shopee"]).map(p=>({p,...agg(S.posts.filter(x=>x.channel===p),"reach")})).filter(x=>x.n);const rmx=Math.max(1,...reach.map(x=>x.sum||0));
   k.insertAdjacentHTML("afterend",`<div class="g2"><div class="panel"><div class="ph"><h2>สถานะคอนเทนต์</h2><button class="btn sm" data-act="go" data-v="planner">Content Planner</button></div><div class="bars">${STAGES.map(([s,n])=>`<div class="bar"><span class="lab">${n}</span><div class="track"><div class="fill" style="width:${cnt(s)/tot*100}%;background:${STAGE_C[s]}"></div></div><span class="v">${cnt(s)}</span></div>`).join("")}</div></div>
     <div class="panel"><div class="ph"><h2>Reach แยกตามแพลตฟอร์ม</h2><button class="btn sm" data-act="go" data-v="perf">Performance</button></div>${reach.length?`<div class="bars">${reach.sort((a,b)=>b.sum-a.sum).map(x=>`<div class="bar"><span class="lab">${CH[x.p]?.n}</span><div class="track"><div class="fill" style="width:${x.sum/rmx*100}%"></div></div><span class="v">${fmtK(x.sum)}</span></div>`).join("")}</div><div class="cnt" style="margin-top:6px">รวมจาก ${reach.reduce((a,x)=>a+x.n,0)} คอนเทนต์ที่กรอก Reach</div>`:`<div class="empty">ยังไม่มีคอนเทนต์ที่กรอก Reach</div>`}</div></div>`)};
+
+// ================= GOOGLE TRENDS (marketing) =================
+// Google has no public official Trends API, so this tool does not fetch or invent numbers.
+// It builds Explore links, then reads the CSV the user exports from trends.google.com (values are relative 0–100, not search volume).
+S.trends=[];COL.trends="trend_sets";
+const TR_TIME={"now 7-d":"7 วันที่ผ่านมา","today 1-m":"30 วันที่ผ่านมา","today 3-m":"90 วันที่ผ่านมา","today 12-m":"12 เดือนที่ผ่านมา","today 5-y":"5 ปีที่ผ่านมา"};
+const TR_GEO={TH:"ประเทศไทย","TH-10":"กรุงเทพมหานคร","":"ทั่วโลก"};
+const TR_CAT={"0":"ทุกหมวด","71":"อาหารและเครื่องดื่ม (Food & Drink)","908":"อาหารและเครื่องดื่ม › ทำอาหาร/สูตร","18":"ช้อปปิ้ง (Shopping)"};
+const TR_PROP={"":"Web Search","youtube":"YouTube Search","froogle":"Google Shopping","images":"Image Search","news":"News Search"};
+const TR_C=["var(--accent)","var(--mango)","var(--sky)","var(--plum)","var(--chili)"];
+const trKws=s=>(s.keywords||[]).filter(Boolean).slice(0,5);
+const trUrl=(s,kws)=>{const e=encodeURIComponent;const p=["date="+e(s.time||"today 12-m")];if(s.geo)p.push("geo="+e(s.geo));p.push("q="+(kws||trKws(s)).map(e).join(","));if(s.cat&&s.cat!=="0")p.push("cat="+e(s.cat));if(s.gprop)p.push("gprop="+e(s.gprop));p.push("hl=th");return"https://trends.google.com/trends/explore?"+p.join("&")};
+const TR_NOW="https://trends.google.com/trending?geo=TH&hl=th";
+
+// ---- CSV parsers (Google Trends export formats) ----
+function trVal(v){v=String(v??"").trim();if(v==="")return null;if(/^<\s*1$/.test(v))return 0.5;const n=Number(v.replace(/,/g,""));return Number.isFinite(n)?n:null}
+function trDateLike(s){s=String(s||"").trim();return /^\d{4}-\d{2}(-\d{2})?/.test(s)||/^\d{1,2}\/\d{1,2}\/\d{2,4}/.test(s)||!isNaN(Date.parse(s))&&/\d{4}/.test(s)}
+function parseTimeline(text){const rows=parseCSV(text).map(r=>r.map(c=>String(c??"").trim()));let h=-1;
+  for(let i=0;i<rows.length-1;i++){if(rows[i].length>=2&&rows[i+1].length>=2&&!trDateLike(rows[i][0])&&trDateLike(rows[i+1][0])){h=i;break}}
+  if(h<0)return null;const hdr=rows[h];const cols=hdr.slice(1).map(x=>{const m=x.match(/^(.*?):\s*\((.*)\)\s*$/);return{kw:(m?m[1]:x).trim(),geo:m?m[2]:""}}).filter(c=>c.kw);
+  const labels=[];const vals=cols.map(()=>[]);let partial=false;
+  for(let i=h+1;i<rows.length;i++){const r=rows[i];if(!r[0]||!trDateLike(r[0]))break;const d=normDate(r[0])||r[0].slice(0,10);labels.push(d);cols.forEach((c,j)=>{const raw=r[j+1]||"";if(/\*|partial/i.test(raw))partial=true;vals[j].push(trVal(raw.replace(/\*/g,"")))})}
+  if(!labels.length||!cols.length)return null;
+  return{unit:/day|วัน/i.test(hdr[0])?"day":/month|เดือน/i.test(hdr[0])?"month":/week|สัปดาห์/i.test(hdr[0])?"week":"time",labels,series:cols.map((c,j)=>({kw:c.kw,geo:c.geo,vals:vals[j]})),partial}}
+function parseRelated(text){const rows=parseCSV(text).map(r=>r.map(c=>String(c??"").trim()));let sec=null;const out=[];
+  for(const r of rows){const a=(r[0]||"");if(/^(top|ยอดนิยม|อันดับต้น)/i.test(a)&&r.length<=2&&!r[1]){sec="top";continue}if(/^(rising|กำลังมาแรง|เพิ่มขึ้น)/i.test(a)&&r.length<=2&&!r[1]){sec="rising";continue}
+    if(!sec||!a||r.length<2)continue;const v=r[1];out.push({type:sec,query:a,value:v,score:/breakout|พุ่งสูง|ทะยาน/i.test(v)?1e6:(N(String(v).replace(/[+%]/g,""))??0)})}
+  return out.length?out:null}
+
+// ---- stats ----
+function trStats(lbl,vals,unit){const ok=vals.map((v,i)=>({v,i})).filter(x=>x.v!=null);if(!ok.length)return null;
+  const avg=ok.reduce((a,x)=>a+x.v,0)/ok.length;const peak=ok.reduce((a,x)=>x.v>a.v?x:a,ok[0]);const last=ok[ok.length-1];
+  const w=unit==="day"?28:unit==="month"?3:4;const tail=ok.slice(-w),prev=ok.slice(-2*w,-w);const am=a=>a.length?a.reduce((s,x)=>s+x.v,0)/a.length:null;
+  const a1=am(tail),a0=am(prev);const chg=a0?((a1-a0)/a0):null;
+  const span=lbl.length>1?(new Date(lbl[lbl.length-1])-new Date(lbl[0]))/864e5:0;let season=null;
+  if(span>=330&&unit!=="day"){const by={};ok.forEach(x=>{const m=+String(lbl[x.i]).slice(5,7);if(m){(by[m]=by[m]||[]).push(x.v)}});const ms=Object.entries(by).map(([m,a])=>[+m,a.reduce((s,v)=>s+v,0)/a.length]).sort((a,b)=>b[1]-a[1]);if(ms.length>=6)season=ms.slice(0,2).map(x=>x[0])}
+  return{avg,peak:{v:peak.v,l:lbl[peak.i]},last:{v:last.v,l:lbl[last.i]},chg,season,w}}
+const trFmt=v=>v==null?"–":v===0.5?"<1":fmtN(v,v%1?1:0);
+const trChg=c=>c==null?`<span class="cnt">–</span>`:`<b style="color:${c>0.05?"var(--accent)":c<-0.05?"var(--chili)":"inherit"}">${c>0?"▲":c<0?"▼":""} ${Math.abs(c*100).toFixed(0)}%</b>`;
+
+function trChart(tl){const W=760,H=240,L=34,R=10,T=10,B=28;const n=tl.labels.length;const x=i=>L+(n<2?0:i*(W-L-R)/(n-1));const y=v=>T+(100-v)*(H-T-B)/100;
+  const grid=[0,25,50,75,100].map(g=>`<line x1="${L}" x2="${W-R}" y1="${y(g)}" y2="${y(g)}" stroke="var(--line)" stroke-width="1"/><text x="${L-6}" y="${y(g)+4}" text-anchor="end" font-size="11" fill="var(--muted)">${g}</text>`).join("");
+  const ticks=[0,Math.floor((n-1)/2),n-1].filter((v,i,a)=>a.indexOf(v)===i).map(i=>`<text x="${x(i)}" y="${H-8}" text-anchor="${i===0?"start":i===n-1?"end":"middle"}" font-size="11" fill="var(--muted)">${esc(thDate(tl.labels[i])||tl.labels[i])}</text>`).join("");
+  const lines=tl.series.map((s,j)=>{let d="",pen=false;s.vals.forEach((v,i)=>{if(v==null){pen=false;return}d+=(pen?"L":"M")+x(i).toFixed(1)+" "+y(v).toFixed(1);pen=true});return`<path d="${d}" fill="none" stroke="${TR_C[j%5]}" stroke-width="2" stroke-linejoin="round"><title>${esc(s.kw)}</title></path>`}).join("");
+  return`<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="กราฟความสนใจตามช่วงเวลา (ค่า 0–100 เทียบกัน)" style="display:block;max-width:100%;height:auto">${grid}${ticks}${lines}</svg>
+  <div class="legend">${tl.series.map((s,j)=>`<span><i style="display:inline-block;width:14px;height:3px;background:${TR_C[j%5]};vertical-align:middle;margin-right:6px"></i>${esc(s.kw)}</span>`).join("")}</div>`}
+
+// ---- view ----
+VIEWS.trends=()=>{const sets=S.trends.slice().sort((a,b)=>(b.updatedAt||"").localeCompare(a.updatedAt||""));let cur=sets.find(s=>s.id===S.ui.trSel)||sets[0];
+  $("#v-trends").innerHTML=`<div class="vhead"><div><h1>Google Trends</h1><p>ตั้งชุดคีย์เวิร์ดการตลาด เปิดดูใน Google Trends แล้วนำไฟล์ CSV กลับมาวิเคราะห์ เทียบช่วงพีค และส่งคำค้นที่กำลังมาแรงไปทำคอนเทนต์</p></div><div class="row"><a class="btn" href="${TR_NOW}" target="_blank" rel="noopener">Trending now (TH) ↗</a><button class="btn primary" data-act="trEdit">＋ ชุดคีย์เวิร์ด</button></div></div>
+  <div class="note"><b>ตัวเลขใน Google Trends เป็นค่าเทียบ 0–100 ไม่ใช่จำนวนการค้นหา</b> 100 คือจุดที่คนสนใจสูงสุดในช่วงและพื้นที่ที่เลือก ค่าจะเปลี่ยนเมื่อเปลี่ยนชุดคำหรือช่วงเวลา จึงเทียบกันได้เฉพาะคำในไฟล์เดียวกัน · Google ไม่มี API สาธารณะอย่างเป็นทางการ ระบบนี้จึงไม่ดึงหรือสร้างตัวเลขเอง ข้อมูลทั้งหมดมาจากไฟล์ที่ทีมดาวน์โหลดจาก trends.google.com (ปุ่ม ⤓ บนกราฟ)</div>
+  ${sets.length?`<div class="tabs" role="tablist">${sets.map(s=>`<button role="tab" aria-selected="${s.id===cur.id}" data-act="trSel" data-id="${s.id}">${esc(s.name)}</button>`).join("")}</div>${trDetail(cur)}`:`<div class="panel"><div class="empty">ยังไม่มีชุดคีย์เวิร์ด กด “＋ ชุดคีย์เวิร์ด” เพื่อเริ่ม เช่น ไมโครกรีน · ดอกไม้กินได้ · ผักสลัด · ผักออร์แกนิค</div></div>`}
+  <div class="panel"><h2>วิธีใช้</h2><ol style="margin:0;padding-left:20px;line-height:1.8"><li>สร้างชุดคีย์เวิร์ด (ไม่เกิน 5 คำต่อชุด) เลือกพื้นที่ ช่วงเวลา หมวด และประเภทการค้นหา</li><li>กด <b>เปิดใน Google Trends ↗</b> ระบบตั้งค่าให้ครบตามชุด</li><li>ที่กราฟ “ความสนใจตามช่วงเวลา” กดไอคอนดาวน์โหลด จะได้ <code>multiTimeline.csv</code> · ที่ “คำค้นหาที่เกี่ยวข้อง” ได้ <code>relatedQueries.csv</code> (ทีละคีย์เวิร์ด)</li><li>กด <b>นำเข้า CSV</b> แล้วเลือกไฟล์หรือวางข้อความ ระบบแยกประเภทไฟล์ให้เอง</li><li>ดูช่วงพีค การเปลี่ยนแปลงล่าสุด และเดือนที่คนสนใจสูง แล้วส่งคำค้นที่มาแรงไป Idea Vault, SEO หรือเทรนด์ & คู่แข่ง</li></ol></div>`};
+
+function trDetail(s){const tl=s.timeline;const rel=s.related||[];const kws=trKws(s);
+  const stats=tl?tl.series.map((x,j)=>({kw:x.kw,j,st:trStats(tl.labels,x.vals,tl.unit)})):[];
+  const relBy={};rel.forEach(r=>{(relBy[r.kw||"-"]=relBy[r.kw||"-"]||{top:[],rising:[]})[r.type].push(r)});
+  return`<div class="panel"><div class="ph"><div><h2 style="margin:0">${esc(s.name)}</h2><div class="cnt">${esc(TR_GEO[s.geo]??s.geo)} · ${esc(TR_TIME[s.time]||s.time)} · ${esc(TR_CAT[s.cat||"0"]||"หมวด "+s.cat)} · ${esc(TR_PROP[s.gprop||""])}${s.note?` · ${esc(s.note)}`:""}</div></div>
+    <div class="row"><a class="btn primary" href="${trUrl(s)}" target="_blank" rel="noopener">เปิดใน Google Trends ↗</a><button class="btn" data-act="trImport" data-id="${s.id}">⤒ นำเข้า CSV</button><button class="btn ghost" data-act="trEdit" data-id="${s.id}">แก้ไข</button></div></div>
+    ${s.stale?`<div class="note" style="margin-top:8px;border-color:var(--chili)">ชุดนี้เปลี่ยนคีย์เวิร์ด พื้นที่ หรือช่วงเวลา หลังนำเข้ากราฟล่าสุด ข้อมูลด้านล่างอาจไม่ตรงกับการตั้งค่าปัจจุบัน ควรนำเข้า CSV ใหม่</div>`:""}<div class="chips" style="margin-top:6px">${kws.map((k,j)=>`<a class="tag" href="${trUrl(s,[k])}" target="_blank" rel="noopener" title="เปิดคำนี้คำเดียว (ดูคำค้นที่เกี่ยวข้อง)" style="text-decoration:none;border-left:3px solid ${TR_C[j%5]}">${esc(k)} ↗</a>`).join("")}</div></div>
+  ${tl?`<div class="panel"><div class="ph"><h2>ความสนใจตามช่วงเวลา</h2><span class="cnt">${tl.labels.length} จุด (${esc({week:"รายสัปดาห์",day:"รายวัน",month:"รายเดือน"}[tl.unit]||"")}) · ${thDate(tl.labels[0])} – ${thDate(tl.labels[tl.labels.length-1])} · นำเข้า ${thDT(s.timelineAt)}${tl.file?` · ${esc(tl.file)}`:""}</span></div>${trChart(tl)}
+    ${tl.partial?`<div class="cnt" style="margin-top:6px">* จุดสุดท้ายเป็นข้อมูลบางส่วน (ช่วงที่ยังไม่จบ) อาจต่ำกว่าความจริง</div>`:""}
+    <div style="overflow-x:auto;margin-top:12px"><table style="min-width:680px"><thead><tr><th>คีย์เวิร์ด</th><th class="r">ล่าสุด</th><th class="r">เฉลี่ยทั้งช่วง</th><th class="r">${stats[0]?.st?.w||4} ${tl.unit==="day"?"วัน":tl.unit==="month"?"เดือน":"สัปดาห์"}ล่าสุด เทียบก่อนหน้า</th><th>จุดพีค</th><th>เดือนที่สนใจสูง</th></tr></thead><tbody>
+    ${stats.map(x=>x.st?`<tr><td><i style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${TR_C[x.j%5]};margin-right:6px"></i>${esc(x.kw)}</td><td class="r num">${trFmt(x.st.last.v)}</td><td class="r num">${fmtN(x.st.avg,1)}</td><td class="r">${trChg(x.st.chg)}</td><td>${trFmt(x.st.peak.v)} · ${thDate(x.st.peak.l)}</td><td>${x.st.season?x.st.season.map(m=>TH_M[m-1]).join(", "):`<span class="cnt">ต้องมีข้อมูล ≥ 12 เดือน</span>`}</td></tr>`:`<tr><td>${esc(x.kw)}</td><td colspan="5" class="cnt">ไม่มีค่า</td></tr>`).join("")}</tbody></table></div>
+    <div class="row" style="margin-top:10px"><span class="cnt">“&lt;1” นับเป็น 0.5 · ค่าเทียบได้เฉพาะคำในไฟล์นี้</span><span class="spacer"></span><button class="btn sm" data-act="trAI" data-id="${s.id}">✦ สรุปด้วย AI</button></div>
+    ${s.ai?`<div class="note" style="margin-top:10px"><b>สรุปโดย AI</b> (${thDT(s.ai.at)}) — อ่านจากตัวเลขในตารางนี้เท่านั้น ควรตรวจก่อนนำไปใช้<div style="white-space:pre-wrap;margin-top:6px">${esc(s.ai.text)}</div></div>`:""}</div>`
+  :`<div class="panel"><div class="empty">ยังไม่มีข้อมูลกราฟ กด “เปิดใน Google Trends ↗” ดาวน์โหลด <code>multiTimeline.csv</code> แล้วกด “⤒ นำเข้า CSV”</div></div>`}
+  <div class="panel"><div class="ph"><h2>คำค้นหาที่เกี่ยวข้อง</h2><span class="cnt">จาก relatedQueries.csv · Breakout = เพิ่มขึ้นมากกว่า 5,000%</span></div>
+  ${Object.keys(relBy).length?Object.entries(relBy).map(([kw,g])=>`<h3 style="font-size:14px;margin:12px 0 6px">${esc(kw)} <span class="cnt">นำเข้า ${thDT((rel.find(r=>(r.kw||"-")===kw)||{}).at)}</span></h3><div class="g2">${["rising","top"].map(t=>`<div><div class="cnt" style="margin-bottom:4px">${t==="rising"?"กำลังมาแรง (Rising)":"ยอดนิยม (Top)"}</div>${g[t].length?`<table><tbody>${g[t].slice().sort((a,b)=>b.score-a.score).slice(0,15).map(r=>{const i=rel.indexOf(r);return`<tr><td>${esc(r.query)}</td><td class="r num">${esc(r.value)}</td><td class="r" style="white-space:nowrap">${r.sent?`<span class="st ok">${esc(r.sent)}</span>`:`<button class="btn ghost sm" data-act="trSend" data-id="${s.id}" data-i="${i}" data-to="idea" title="ส่งไป Idea Vault">💡</button><button class="btn ghost sm" data-act="trSend" data-id="${s.id}" data-i="${i}" data-to="seo" title="เพิ่มเป็นคีย์เวิร์ด SEO">SEO</button><button class="btn ghost sm" data-act="trSend" data-id="${s.id}" data-i="${i}" data-to="intel" title="บันทึกในเทรนด์ & คู่แข่ง">เทรนด์</button>`}</td></tr>`}).join("")}</tbody></table>`:`<div class="cnt">ไม่มี</div>`}</div>`).join("")}</div>`).join("")
+  :`<div class="empty">ยังไม่มีข้อมูล เปิดคีย์เวิร์ดทีละคำ (กดชิปด้านบน) ดาวน์โหลด <code>relatedQueries.csv</code> แล้วนำเข้า</div>`}</div>`}
+
+ACT.trSel=el=>{S.ui.trSel=el.dataset.id;forceRender()};
+ACT.trEdit=el=>{const s=S.trends.find(x=>x.id===el.dataset.id);const x=s||{geo:"TH",time:"today 12-m",cat:"71",gprop:"",keywords:[]};
+  openDlg({title:s?"แก้ไขชุดคีย์เวิร์ด":"ชุดคีย์เวิร์ดใหม่",body:`${fld("ชื่อชุด","trN",x.name,"text","placeholder='เช่น ผักพรีเมียม vs ผักทั่วไป'")}
+    ${area("คีย์เวิร์ด (บรรทัดละคำ สูงสุด 5 คำ)","trK",(x.keywords||[]).join("\n"),5,"placeholder='ไมโครกรีน&#10;ดอกไม้กินได้&#10;ผักสลัด'")}
+    <div class="row">${sel("พื้นที่","trG",TR_GEO,x.geo)}${sel("ช่วงเวลา","trT",TR_TIME,x.time)}</div><div class="row">${sel("หมวด","trC",TR_CAT,x.cat||"0")}${sel("ประเภทการค้นหา","trP",TR_PROP,x.gprop||"")}</div>
+    ${fld("หมายเหตุ / เป้าหมาย","trNote",x.note,"text","placeholder='เช่น หาช่วงพีคก่อนวางแคมเปญปีใหม่'")}
+    <div class="cnt">ถ้าเปลี่ยนคีย์เวิร์ดหรือช่วงเวลา ข้อมูลกราฟเดิมจะไม่ตรงกับชุดใหม่ ต้องนำเข้า CSV ใหม่</div>`,
+    foot:[...(s?[{label:"ลบ",cls:"danger",confirm:"ยืนยันลบชุดนี้และข้อมูลที่นำเข้า?",act:async()=>{await dbDel(COL.trends,s.id);S.ui.trSel=null;toast("ลบแล้ว")}}]:[]),"|",{label:"ยกเลิก"},{label:"บันทึก",cls:"primary",act:async()=>{
+      const kws=[...new Set($("#trK").value.split(/\n|,/).map(k=>k.trim()).filter(Boolean))];const name=V("trN")||kws.slice(0,3).join(" · ");
+      if(!kws.length){toast("ใส่คีย์เวิร์ดอย่างน้อย 1 คำ");return false}if(kws.length>5){toast("Google Trends เทียบได้สูงสุด 5 คำต่อครั้ง");return false}
+      if(S.trends.some(t=>t.name===name&&t.id!==s?.id)){toast("มีชื่อชุดนี้แล้ว");return false}
+      const d={name,keywords:kws,geo:V("trG"),time:V("trT"),cat:V("trC"),gprop:V("trP"),note:V("trNote")};
+      try{if(s){if(s.timeline&&(s.keywords.join("|")!==kws.join("|")||s.time!==d.time||s.geo!==d.geo))d.stale=true;await dbUpd(COL.trends,s.id,d)}else{const r=await dbAdd(COL.trends,d);S.ui.trSel=r.id}toast("บันทึกแล้ว")}catch(e){toast(dbErr(e));return false}}}]})};
+
+ACT.trImport=el=>{const s=S.trends.find(x=>x.id===el.dataset.id);if(!s)return;let fname="";
+  openDlg({title:"นำเข้า CSV จาก Google Trends",wide:true,body:`<div class="row"><button class="btn" id="trPick" type="button">เลือกไฟล์ .csv</button><span class="cnt" id="trFn"></span></div>
+    ${area("หรือวางข้อความจากไฟล์","trTx","",8,"placeholder='Category: All categories&#10;&#10;Week,ไมโครกรีน: (Thailand),...'")}
+    <label class="f">คีย์เวิร์ดของไฟล์คำค้นที่เกี่ยวข้อง (relatedQueries)<select id="trKw">${trKws(s).map(k=>`<option>${esc(k)}</option>`).join("")}</select></label>
+    <div id="trPrev" class="cnt">ยังไม่มีข้อมูล</div>`,
+    onOpen:()=>{const prev=()=>{const t=$("#trTx").value;const tl=t&&parseTimeline(t);const rl=!tl&&t&&parseRelated(t);
+        $("#trPrev").innerHTML=tl?`พบไฟล์ <b>ความสนใจตามช่วงเวลา</b>: ${tl.series.length} คีย์เวิร์ด (${tl.series.map(x=>esc(x.kw)).join(", ")}) · ${tl.labels.length} จุด · ${esc(tl.labels[0])} ถึง ${esc(tl.labels[tl.labels.length-1])}${tl.series.some(x=>!trKws(s).includes(x.kw))?`<br><span style="color:var(--chili)">คีย์เวิร์ดในไฟล์ไม่ตรงกับชุดนี้ทั้งหมด ระบบจะเก็บตามไฟล์</span>`:""}`
+        :rl?`พบไฟล์ <b>คำค้นหาที่เกี่ยวข้อง</b>: Top ${rl.filter(r=>r.type==="top").length} · Rising ${rl.filter(r=>r.type==="rising").length} รายการ (จะผูกกับคีย์เวิร์ดที่เลือกด้านบน)`:t?`<span style="color:var(--chili)">อ่านรูปแบบไฟล์ไม่ออก ต้องเป็น multiTimeline.csv หรือ relatedQueries.csv จาก Google Trends</span>`:"ยังไม่มีข้อมูล"};
+      $("#trTx").oninput=prev;$("#trPick").onclick=async()=>{const f=await pickFile(".csv,text/csv,text/plain");if(!f)return;fname=f.name;$("#trFn").textContent=f.name;$("#trTx").value=await f.text();prev()}},
+    foot:["|",{label:"ยกเลิก"},{label:"นำเข้า",cls:"primary",act:async()=>{const t=$("#trTx").value;const tl=t&&parseTimeline(t);
+      try{if(tl){tl.file=fname;await dbUpd(COL.trends,s.id,{timeline:tl,timelineAt:nowISO(),stale:false,ai:null});toast(`นำเข้า ${tl.labels.length} จุดแล้ว`);return}
+        const rl=t&&parseRelated(t);if(!rl){toast("อ่านรูปแบบไฟล์ไม่ออก");return false}const kw=V("trKw");const at=nowISO();
+        const keep=(s.related||[]).filter(r=>r.kw!==kw);const old=new Map((s.related||[]).filter(r=>r.kw===kw).map(r=>[r.type+"|"+r.query,r.sent]));
+        await dbUpd(COL.trends,s.id,{related:keep.concat(rl.map(r=>({...r,kw,at,sent:old.get(r.type+"|"+r.query)||null})))});toast(`นำเข้าคำค้น ${rl.length} รายการ (${kw})`)}catch(e){toast(dbErr(e));return false}}}]})};
+
+ACT.trSend=async el=>{const s=S.trends.find(x=>x.id===el.dataset.id);const i=+el.dataset.i;const r=s?.related?.[i];if(!r)return;const to=el.dataset.to;
+  const src=`Google Trends · ${TR_GEO[s.geo]??s.geo} · ${TR_TIME[s.time]||s.time} · คำค้นที่เกี่ยวข้องกับ “${r.kw}” (${r.type==="rising"?"Rising":"Top"} ${r.value})`;let label="";
+  try{if(to==="idea"){if(S.ideas.some(x=>x.title.trim().toLowerCase()===r.query.toLowerCase())){toast("มีไอเดียนี้แล้วใน Idea Vault");label="Idea"}else{await dbAdd(COL.ideas,{title:r.query,pillar:"",note:src});toast("ส่งไป Idea Vault แล้ว");label="Idea"}}
+    else if(to==="seo"){const d={keyword:r.query,url:"",month:"",country:s.geo==="TH"?"tha":"",device:"",stype:"SEO",intent:"informational",kstatus:"new",target:"",volume:null,volumeSource:"",clicks:null,impressions:null,position:null,source:src,plan:"",qa:"",refs:""};
+      const key=seoKey(d);if(S.seo.some(x=>(x.keyword||"").toLowerCase().trim()===r.query.toLowerCase().trim())){toast("มีคีย์เวิร์ดนี้ใน SEO แล้ว");label="SEO"}else{await dbSetNew(COL.seo,"K-"+hash(key),d);toast("เพิ่มใน SEO แล้ว (ยังไม่มี Volume — Trends ไม่ใช่จำนวนการค้นหา)");label="SEO"}}
+    else{const url=trUrl(s,[r.query]);if(S.intel.some(x=>x.url===url)){toast("บันทึกไว้แล้วในเทรนด์ & คู่แข่ง");label="เทรนด์"}else{await dbAdd(COL.intel,{type:"trend",title:r.query,url,publishedAt:today(),angles:[],facts:src,proposal:"",products:"",source:"Google Trends",verified:false,checkedAt:null});toast("บันทึกในเทรนด์ & คู่แข่งแล้ว");label="เทรนด์"}}
+    const rel=s.related.slice();rel[i]={...r,sent:label};await dbUpd(COL.trends,s.id,{related:rel})}catch(e){toast(dbErr(e))}};
+
+ACT.trAI=async el=>{const s=S.trends.find(x=>x.id===el.dataset.id);const tl=s?.timeline;if(!tl)return;if(!sample){toast("ยังไม่ได้เปิดใช้ AI ในเว็บนี้");return}
+  const rows=tl.series.map(x=>{const st=trStats(tl.labels,x.vals,tl.unit);return st?`${x.kw}: ล่าสุด ${trFmt(st.last.v)} (${st.last.l}), เฉลี่ย ${st.avg.toFixed(1)}, เปลี่ยน ${st.w} ช่วงล่าสุด ${st.chg==null?"-":(st.chg*100).toFixed(0)+"%"}, พีค ${st.peak.v} (${st.peak.l}), เดือนสูง ${st.season?st.season.map(m=>TH_M[m-1]).join("/"):"-"}`:`${x.kw}: ไม่มีค่า`}).join("\n");
+  const rising=(s.related||[]).filter(r=>r.type==="rising").slice(0,15).map(r=>`${r.kw} → ${r.query} (${r.value})`).join("\n");
+  el.disabled=true;el.textContent="กำลังสรุป…";
+  try{const r=await sample.json(`คุณคือนักการตลาดออนไลน์ของ ${S.brand?.name||"Delish Foods"} (ผักผลไม้พรีเมียม วัตถุดิบหายาก ลูกค้า B2B/B2C/B2M)
+ข้อมูล Google Trends (${TR_GEO[s.geo]??s.geo}, ${TR_TIME[s.time]||s.time}) ค่าเป็นดัชนีเทียบ 0-100 ไม่ใช่จำนวนการค้นหา ห้ามแปลงเป็นจำนวนคนค้นหา ห้ามเติมตัวเลขที่ไม่มีในข้อมูล
+${rows}
+คำค้นที่กำลังมาแรง:
+${rising||"-"}
+สรุปสั้นเป็นภาษาไทย: 1) คำไหนแรงขึ้น/ลดลง 2) ช่วงเวลาที่ควรวางคอนเทนต์หรือแคมเปญ 3) ไอเดียคอนเทนต์ 3 ข้อจากข้อมูลนี้
+ตอบ JSON เท่านั้น: {"text":"..."}`,{modelTier:"default"});
+    const text=String(r?.text||"").trim();if(!text){toast("AI ไม่ได้ส่งข้อความกลับ");return}await dbUpd(COL.trends,s.id,{ai:{text,at:nowISO()}});toast("สรุปแล้ว")}
+  catch(e){toast(aiErr(e))}finally{el.disabled=false;el.textContent="✦ สรุปด้วย AI"}};
