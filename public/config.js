@@ -1,21 +1,20 @@
 // ===== Delish Creative OS — site configuration (safe to publish; contains no secrets) =====
 window.DELISH_CONFIG = {
   appName: "Delish Creative OS",
-  // Firebase console → Project settings → Your apps → Web app → firebaseConfig
   firebase: {
-    apiKey: "REPLACE",
-    authDomain: "REPLACE.firebaseapp.com",
-    projectId: "REPLACE",
-    storageBucket: "REPLACE.firebasestorage.app",
-    messagingSenderId: "REPLACE",
-    appId: "REPLACE"
+    apiKey: "AIzaSyA-OyoX-TF6HY0jcCqtf0aq34Gt8_IHBc4",
+    authDomain: "delish-creative-os.firebaseapp.com",
+    projectId: "delish-creative-os",
+    storageBucket: "delish-creative-os.firebasestorage.app",
+    messagingSenderId: "461742779665",
+    appId: "1:461742779665:web:bb2c906467e1098c08b0b0"
   },
-  ownerEmails: ["digitalmarketing01@delishfoods.co.th"], // must match firestore.rules / storage.rules / functions
-  allowedDomains: ["delishfoods.co.th"],
-  signInMethods: ["google", "microsoft"],                 // remove one if the company only uses one
-  microsoftTenant: "",                                    // Azure tenant ID (optional, restricts to company tenant)
+  ownerEmails: ["delishfoods.maneerat@gmail.com", "digitalmarketing01@delishfoods.co.th"],
+  allowedDomains: [],
+  signInMethods: ["google"],
+  microsoftTenant: "",
   functionsRegion: "asia-southeast1",
-  aiEnabled: false,       // true only after ANTHROPIC_API_KEY secret + functions deploy (Blaze plan, paid usage)
-  storageEnabled: false,  // true only after Cloud Storage is enabled (Blaze plan)
-  searchConsole: true     // Google sign-in also asks read-only Search Console access
+  aiEnabled: false,
+  storageEnabled: false,
+  searchConsole: true
 };
