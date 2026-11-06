@@ -515,6 +515,56 @@ ACT.ideaEdit=el=>{const x=S.ideas.find(i=>i.id===el.dataset.id);if(!x)return;let
     onOpen:()=>{const sh=()=>$("#ieBox").innerHTML=th?`<img class="ideaThumbPrev" src="${th}" alt="ภาพไอเดีย">`:`<div class="cnt">ไม่มีภาพ (จะใช้ภาพจากลิงก์ถ้ามี)</div>`;sh();
       const take=async f=>{if(!f||!/^image\//.test(f.type))return;const d=await shrinkImage(f).catch(()=>null);if(!d){toast("ภาพใหญ่เกินไป");return}th=d;sh()};
       $("#ieImg").onclick=async()=>take(await pickFile("image/*"));$("#ieDel").onclick=()=>{th=null;sh()};
-      $("#dlgBody").addEventListener("paste",e=>{const it=[...(e.clipboardData?.items||[])].find(i=>i.type.startsWith("image/"));if(it){e.preventDefault();take(it.getAsFile())}})},
+      $("#dlgBody").onpaste=e=>{const it=[...(e.clipboardData?.items||[])].find(i=>i.type.startsWith("image/"));if(it){e.preventDefault();take(it.getAsFile())}}},
     foot:["|",{label:"ยกเลิก"},{label:"บันทึก",cls:"primary",act:async()=>{const u=V("ieU");if(!V("ieT")){toast("ใส่ไอเดีย");return false}if(u&&!/^https?:\/\//i.test(u)){toast("ลิงก์ต้องขึ้นต้นด้วย http(s)://");return false}
       try{await dbUpd(COL.ideas,x.id,{title:V("ieT"),pillar:V("ieP"),note:V("ieN"),url:u,thumb:th})}catch(e){toast(dbErr(e));return false}toast("บันทึกแล้ว")}}]})};
+
+// ================= ATTACHMENTS without Cloud Storage =================
+// When file storage is available (claude.ai, or the company site with Storage on) files upload as before.
+// Without it, pictures are shrunk and stored inside the record, and videos/PDFs are attached as links (Drive, YouTube, TikTok…).
+{const prevUrl=window.__ASSET_URL;window.__ASSET_URL=id=>/^(data:|https?:)/.test(String(id||""))?id:(prevUrl?prevUrl(id):"/_blob/"+encodeURIComponent(id))}
+const INLINE_MAX=700000;
+uploadFile=async function(file){
+  if(assets){if(file.size>20*1024*1024)throw{code:"too_large",message:"ไฟล์ใหญ่เกิน 20 MB (วิดีโอยาวให้แนบลิงก์ไดรฟ์แทน)"};const r=await assets.upload(file);return{id:r.id,type:r.contentType||file.type,name:file.name,size:r.sizeBytes||file.size}}
+  if(/^image\//.test(file.type)){const d=await shrinkImage(file,1280,0.78).catch(()=>null);if(!d)throw{code:"too_large",message:"ภาพใหญ่เกินไป ลองย่อหรือแคปให้เล็กลง"};return{id:d,type:"image/jpeg",name:file.name,size:Math.round(d.length*.75),inline:true}}
+  throw{code:"no_storage",message:"เว็บนี้ยังไม่ได้เปิดพื้นที่เก็บไฟล์ วิดีโอและ PDF ให้กด “🔗 แนบลิงก์” แล้ววางลิงก์ Google Drive, YouTube หรือ TikTok แทน"}};
+const inlineSize=list=>(list||[]).filter(a=>a.inline).reduce((s,a)=>s+String(a.id).length,0);
+function linkAtt(url){const plat=IDEA_PLAT.find(([re])=>re.test(url));return{id:url,url,type:"link",name:plat?plat[1]:hostOf(url)||"ลิงก์"}}
+attHtml=function(list,removable){if(!list?.length)return`<div class="cnt">ยังไม่มีไฟล์แนบ</div>`;
+  return`<div class="att">${list.map((a,i)=>{const u=a.type==="link"?a.url:assetUrl(a.id);let media;
+    if(a.type==="link"){media=`<a href="${esc(u)}" target="_blank" rel="noopener" class="ideaPv" style="margin:0;aspect-ratio:4/3">${ytId(u)?`<img src="https://i.ytimg.com/vi/${ytId(u)}/hqdefault.jpg" alt="" loading="lazy" onerror="this.remove()"><span class="ideaTag" style="background:var(--yt)">▶ YouTube</span>`:(()=>{const p=IDEA_PLAT.find(([re])=>re.test(u));return`<div class="ideaCard" style="--c:${p?p[2]:"var(--sky)"};padding:10px 12px"><b style="font-size:16px">${esc(p?p[1]:"ลิงก์")}</b><span>${esc(hostOf(u))}</span></div>`})()}</a>`}
+    else media=/^image\//.test(a.type)?`<img src="${u}" alt="${esc(a.name)}" loading="lazy">`:/^video\//.test(a.type)?`<video src="${u}" controls preload="metadata"></video>`:`<div style="aspect-ratio:4/3;display:grid;place-items:center;font-size:12px;color:var(--muted)">${esc((a.type||"file").split("/").pop().toUpperCase())}</div>`;
+    return`<figure>${media}<figcaption><a href="${esc(u)}" target="_blank" rel="noopener"><span>${esc(a.name)}</span></a>${removable?`<button class="btn ghost sm" type="button" data-rmatt="${i}" aria-label="ลบไฟล์">✕</button>`:""}</figcaption></figure>`}).join("")}</div>`};
+const attTools=(id)=>`<div class="row" style="margin-top:6px"><input type="url" id="${id}Url" placeholder="วางลิงก์วิดีโอ/ไฟล์ เช่น Google Drive, YouTube, TikTok" style="flex:1 1 220px"><button class="btn sm" type="button" id="${id}LinkBtn">🔗 แนบลิงก์</button></div>
+  <div class="cnt" style="margin-top:4px">${assets?"อัปโหลดภาพ วิดีโอ และ PDF ได้ไม่เกิน 20 MB ต่อไฟล์":"เว็บนี้เก็บภาพในระบบได้โดยตรง (ย่อขนาดให้อัตโนมัติ) ส่วนวิดีโอและ PDF ให้แนบเป็นลิงก์"} · วางภาพด้วย Ctrl+V ได้</div>`;
+function wireAtt(id,list,box,onChange){const add=a=>{if(a.inline&&inlineSize(list)+String(a.id).length>INLINE_MAX){toast("ภาพในรายการนี้เต็มแล้ว แนบเป็นลิงก์แทน หรือลบภาพเดิมบางภาพ");return}list.push(a);box.innerHTML=attHtml(list,true);onChange&&onChange()};
+  const lb=$("#"+id+"LinkBtn");if(lb)lb.onclick=()=>{const u=V(id+"Url");if(!/^https?:\/\//i.test(u)){toast("ลิงก์ต้องขึ้นต้นด้วย http:// หรือ https://");return}add(linkAtt(u));$("#"+id+"Url").value="";toast("แนบลิงก์แล้ว (กดบันทึกเพื่อยืนยัน)")};
+  $("#dlgBody").onpaste=async e=>{const it=[...(e.clipboardData?.items||[])].find(i=>i.type.startsWith("image/"));if(!it||!$("#"+id+"LinkBtn"))return;e.preventDefault();try{add(await uploadFile(it.getAsFile()))}catch(err){toast(err.message||"แนบภาพไม่สำเร็จ")}};
+  return add}
+
+// Task dialog: enable upload when storage is off (pictures go inline), add link + paste.
+const _openDlgA=openDlg;openDlg=function(o){$("#dlgBody").onpaste=null;_openDlgA(o);const pu=$('#dlgBody [data-act="prodUpload"]');if(pu&&pu.disabled&&S.me?.id){pu.disabled=false;pu.textContent="เพิ่มรูป"}const up=$('#dlgBody [data-act="taskUpload"]');if(!up)return;
+  if(up.disabled&&S.me?.id){up.disabled=false;up.removeAttribute("title");up.textContent="＋ แนบภาพ/ไฟล์"}
+  const box=$("#tAtt");if(box&&!$("#tAttLinkBtn")){box.parentElement.insertAdjacentHTML("beforeend",attTools("tAtt"));wireAtt("tAtt",TD.attachments,box)}};
+ACT.taskUpload=async()=>{const f=await pickFile(assets?"image/*,video/*,application/pdf":"image/*");if(!f)return;const box=$("#tAtt");box.insertAdjacentHTML("afterbegin",`<div class="thinking" id="upSpin"><div class="spin"></div>กำลังแนบ ${esc(f.name)}…</div>`);
+  try{const a=await uploadFile(f);if(a.inline&&inlineSize(TD.attachments)+String(a.id).length>INLINE_MAX){$("#upSpin")?.remove();toast("ภาพในงานนี้เต็มแล้ว แนบเป็นลิงก์แทน");return}TD.attachments.push(a);box.innerHTML=attHtml(TD.attachments,true);toast("แนบแล้ว (กดบันทึกเพื่อยืนยัน)")}catch(e){$("#upSpin")?.remove();toast(e.message||"แนบไม่สำเร็จ ("+(e.code||"error")+")")}};
+
+// Board card: fall back to the product picture when the task has no picture of its own.
+const _taskCardA=taskCard;taskCard=function(t){let h=_taskCardA(t);const head=h.split("<b>")[0];if(/<img/.test(head))return h;
+  const vids=(t.attachments||[]).filter(a=>/^video\//.test(a.type)||a.type==="link").length;const p=S.products.find(x=>x.id===t.productId);
+  if(p?.imageId)h=h.replace('tabindex="0">',`tabindex="0"><img src="${assetUrl(p.imageId)}" alt="" style="width:100%;aspect-ratio:16/9;object-fit:cover;border-radius:6px;opacity:.9" loading="lazy">`);
+  if(vids)h=h.replace("<b>",`<span class="cnt">🎬 ${vids} วิดีโอ/ลิงก์</span><b>`);return h};
+
+// Content Planner post: pictures + video links.
+let PA=null;
+const _openPostA=openPost;openPost=function(p,date){PA=(p?.attachments||[]).map(a=>({...a}));_openPostA(p,date);
+  const anchor=$("#pVis")?.closest("label")||$("#pCap")?.closest("label");if(!anchor)return;
+  anchor.insertAdjacentHTML("afterend",`<div><div class="ph"><h2 style="font-size:14px;margin:0">ภาพ / วิดีโอของโพสต์</h2><button class="btn sm" type="button" id="paUp">🖼 แนบภาพ${assets?" / วิดีโอ":""}</button></div><div id="paBox" style="margin-top:8px">${attHtml(PA,true)}</div>${attTools("pa")}</div>`);
+  const box=$("#paBox");const add=wireAtt("pa",PA,box);
+  $("#paUp").onclick=async()=>{const f=await pickFile(assets?"image/*,video/*":"image/*");if(!f)return;box.insertAdjacentHTML("afterbegin",`<div class="thinking" id="paSpin"><div class="spin"></div>กำลังแนบ ${esc(f.name)}…</div>`);try{add(await uploadFile(f))}catch(e){toast(e.message||"แนบไม่สำเร็จ")}finally{$("#paSpin")?.remove()}};
+  box.addEventListener("click",e=>{const b=e.target.closest("[data-rmatt]");if(!b)return;e.stopPropagation();PA.splice(+b.dataset.rmatt,1);box.innerHTML=attHtml(PA,true)},true)};
+dlg.addEventListener("close",()=>{setTimeout(()=>{PA=null},0)});
+const _dbAddA=dbAdd;dbAdd=function(col,data){if(col===COL.posts&&PA&&dlg.open&&$("#paBox"))data={...data,attachments:PA};return _dbAddA(col,data)};
+const _safeSaveA=safeSave;safeSave=function(col,id,data,base){if(col===COL.posts&&PA&&dlg.open&&$("#paBox"))data={...data,attachments:PA};return _safeSaveA(col,id,data,base)};
+// Keep nested "id" fields (attachments need them); only the record's own id is removed before saving.
+clean=function(o,depth=0){if(Array.isArray(o))return o.map(x=>clean(x,depth+1));if(o&&typeof o==="object"){const r={};for(const k in o)if(o[k]!==undefined&&!(k==="id"&&depth===0))r[k]=clean(o[k],depth+1);return r}return o};
