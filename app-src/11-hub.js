@@ -69,7 +69,7 @@ VIEWS.ideas=()=>{const q=S.ui.iq||"";const list=S.ideas.slice().sort((a,b)=>(b.c
     try{await dbAdd(COL.ideas,{title:t,pillar:V("idP"),note:V("idN")});$("#idT").value="";$("#idN").value="";toast("เพิ่มไอเดียแล้ว")}catch(err){toast(dbErr(err))}}};
 ACT.delIdea=el=>openDlg({title:"ลบไอเดียนี้?",body:`<p>${esc(S.ideas.find(i=>i.id===el.dataset.id)?.title)}</p>`,foot:["|",{label:"ยกเลิก"},{label:"ลบ",cls:"danger",act:async()=>{await dbDel(COL.ideas,el.dataset.id);toast("ลบแล้ว")}}]});
 ACT.ideaPlan=async el=>{const x=S.ideas.find(i=>i.id===el.dataset.id);if(!x||x.usedPostId)return;
-  try{const r=await dbAdd(COL.posts,{hook:x.title,caption:x.note||"",pillar:x.pillar||"",stage:"idea",status:"draft",channel:"facebook",goal:"engagement",date:"",time:"",source:"Idea Vault"});await dbUpd(COL.ideas,x.id,{usedPostId:r.id});toast("ส่งเข้า Content Planner แล้ว");S.ui.pf={};show("planner")}catch(e){toast(dbErr(e))}};
+  try{const r=await dbAdd(COL.posts,{hook:x.title,caption:[x.note,x.url?"ตัวอย่าง: "+x.url:""].filter(Boolean).join("\n"),pillar:x.pillar||"",stage:"idea",status:"draft",channel:"facebook",goal:"engagement",date:"",time:"",source:"Idea Vault"});await dbUpd(COL.ideas,x.id,{usedPostId:r.id});toast("ส่งเข้า Content Planner แล้ว");S.ui.pf={};show("planner")}catch(e){toast(dbErr(e))}};
 
 // ---------- TEAM ----------
 const TACC={admin:"Admin (Editor ขึ้นไป)",editor:"Editor/Contributor",viewer:"Viewer"};
@@ -462,3 +462,59 @@ const _adsReportV2=adsReport;
 adsReport=function(){_adsReportV2();if(!S.ads.length)return;const rows=adsRows();const host=$("#adsBody .kpis");if(!host)return;
   const anchor=[...$$("#adsBody > .panel")].find(p=>/ผลลัพธ์ตามเป้าหมาย/.test(p.querySelector("h2")?.textContent||""))||host;
   anchor.insertAdjacentHTML("afterend",adWebChart()+adRoasChart(rows)+adBubbles(rows))};
+
+// ================= IDEA VAULT v2: reference link + picture preview =================
+// Preview rules (no server, nothing invented): pasted/picked picture → stored small JPEG; YouTube → official thumbnail;
+// direct image URL → the image; any other link → a link card (platform + domain) because the browser cannot read other sites' preview images.
+const IDEA_PLAT=[[/youtu\.?be/i,"YouTube","var(--yt)"],[/tiktok/i,"TikTok","var(--tt)"],[/instagram/i,"Instagram","var(--ig)"],[/facebook|fb\.watch/i,"Facebook","var(--fb)"],[/pinterest|pin\.it/i,"Pinterest","var(--chili)"],[/lemon8/i,"Lemon8","var(--mango)"],[/line\.me/i,"LINE","var(--line-oa)"],[/shopee|lazada/i,"Marketplace","var(--mango)"]];
+const ytId=u=>{const m=String(u||"").match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?(?:.*&)?v=|shorts\/|embed\/|live\/))([\w-]{11})/);return m?m[1]:null};
+const isImgUrl=u=>/^https?:\/\/\S+\.(?:png|jpe?g|gif|webp|avif)(?:[?#]\S*)?$/i.test(u||"");
+const hostOf=u=>{try{return new URL(u).hostname.replace(/^www\./,"")}catch(e){return""}};
+function ideaPreview(x){const u=x.url||"";const plat=IDEA_PLAT.find(([re])=>re.test(u));const pn=plat?plat[1]:hostOf(u)||"ลิงก์";const pc=plat?plat[2]:"var(--sky)";
+  const box=inner=>u?`<a href="${esc(u)}" target="_blank" rel="noopener" class="ideaPv" title="เปิดลิงก์">${inner}</a>`:`<div class="ideaPv">${inner}</div>`;
+  const card=`<div class="ideaCard" style="--c:${pc}"><b>${esc(pn)}</b><span>${esc(hostOf(u))}</span><em>เปิดดูตัวอย่าง ↗</em></div>`;
+  if(x.thumb)return box(`<img src="${esc(x.thumb)}" alt="ภาพตัวอย่างของไอเดีย" loading="lazy">${u?`<span class="ideaTag" style="background:${pc}">${esc(pn)}</span>`:""}`);
+  const yt=ytId(u);if(yt)return box(`<img src="https://i.ytimg.com/vi/${yt}/hqdefault.jpg" alt="ภาพปกวิดีโอ YouTube" loading="lazy" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'ideaFallback',textContent:'YouTube'}))"><span class="ideaTag" style="background:var(--yt)">▶ YouTube</span>`);
+  if(isImgUrl(u))return box(`<img src="${esc(u)}" alt="ภาพตัวอย่าง" loading="lazy" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'ideaFallback',textContent:'โหลดภาพไม่ได้'}))">`);
+  return u?box(card):""}
+async function shrinkImage(file,max=720,q=0.72){const url=URL.createObjectURL(file);try{const im=await new Promise((res,rej)=>{const i=new Image();i.onload=()=>res(i);i.onerror=rej;i.src=url});
+  const s=Math.min(1,max/Math.max(im.width,im.height));const c=document.createElement("canvas");c.width=Math.round(im.width*s);c.height=Math.round(im.height*s);c.getContext("2d").drawImage(im,0,0,c.width,c.height);
+  let d=c.toDataURL("image/jpeg",q);if(d.length>350000)d=c.toDataURL("image/jpeg",0.5);return d.length>450000?null:d}finally{URL.revokeObjectURL(url)}}
+if(!document.getElementById("ideaCss")){const st=document.createElement("style");st.id="ideaCss";st.textContent=`
+.ideaPv{display:block;position:relative;border-radius:10px;overflow:hidden;background:var(--sunk);aspect-ratio:16/10;margin:-4px 0 4px;text-decoration:none;color:inherit}
+.ideaPv img{width:100%;height:100%;object-fit:cover;display:block}
+.ideaTag{position:absolute;left:8px;top:8px;color:#fff;font-size:11px;font-weight:600;padding:2px 8px;border-radius:999px}
+.ideaCard{height:100%;display:flex;flex-direction:column;justify-content:center;align-items:flex-start;gap:4px;padding:16px 18px;border-left:6px solid var(--c);background:linear-gradient(135deg,var(--surface),var(--sunk))}
+.ideaCard b{font-family:var(--display);font-size:22px;color:var(--c)}.ideaCard span{font-size:12px;color:var(--muted);word-break:break-all}.ideaCard em{font-style:normal;font-size:12px;margin-top:6px;color:var(--ink)}
+.ideaFallback{height:100%;display:grid;place-items:center;color:var(--muted);font-size:13px}
+.ideaThumbPrev{max-width:180px;max-height:110px;border-radius:8px;display:block;margin-top:6px}
+#ideaForm.drag{outline:2px dashed var(--accent)}`;document.head.appendChild(st)}
+
+let ideaThumb=null;
+VIEWS.ideas=()=>{const list=S.ideas.slice().sort((a,b)=>(b.createdAt||"").localeCompare(a.createdAt||""));
+  $("#v-ideas").innerHTML=`<div class="vhead"><div><h1>Idea Vault</h1><p>เก็บทุกไอเดียก่อนลืม พร้อมลิงก์และภาพตัวอย่าง แล้วส่งไปวางแผนใน Content Planner ได้ในคลิกเดียว</p></div></div>
+  <form class="panel" id="ideaForm" style="display:flex;flex-direction:column;gap:10px">
+    <div class="row"><input type="text" id="idT" placeholder="พิมพ์ไอเดียคอนเทนต์ใหม่…" style="flex:2 1 260px"><input type="text" id="idP" list="pillarList2" placeholder="Pillar" style="flex:1 1 140px"><datalist id="pillarList2">${PILLARS.map(x=>`<option value="${esc(x)}">`).join("")}</datalist><input type="text" id="idN" placeholder="โน้ต (ถ้ามี)" style="flex:2 1 200px"></div>
+    <div class="row"><input type="url" id="idU" placeholder="ลิงก์ตัวอย่าง เช่น YouTube, TikTok, IG, Facebook หรือเว็บ (ถ้ามี)" style="flex:3 1 280px"><button class="btn" type="button" id="idImgBtn">🖼 เพิ่มภาพ</button><button class="btn primary" type="submit">＋ เพิ่ม</button></div>
+    <div class="cnt">ลิงก์ YouTube และลิงก์รูปภาพจะแสดงภาพให้อัตโนมัติ ลิงก์อื่นแสดงเป็นการ์ดลิงก์ ถ้าอยากได้ภาพ ให้แคปหน้าจอแล้วกด Ctrl+V ในกล่องนี้ หรือกด “เพิ่มภาพ”</div><div id="idThumbBox"></div></form>
+  <div class="g3">${list.map(x=>{const used=x.usedPostId&&S.posts.find(p=>p.id===x.usedPostId);return`<div class="panel" style="display:flex;flex-direction:column;gap:8px">${ideaPreview(x)}<div class="row">${x.pillar?`<span class="tag">${esc(x.pillar)}</span>`:""}${used?`<span class="st ok">วางแผนแล้ว</span>`:""}<span class="spacer"></span><button class="btn ghost sm" data-act="ideaEdit" data-id="${x.id}" aria-label="แก้ไขลิงก์และภาพ">✎</button><button class="btn ghost sm" data-act="delIdea" data-id="${x.id}" aria-label="ลบไอเดีย">✕</button></div>
+    <b style="font-size:15px;line-height:1.4">${esc(x.title)}</b>${x.note?`<div class="cnt">${esc(x.note)}</div>`:""}<div class="cnt">${esc(who(x.createdBy))} · ${thDT(x.createdAt)}</div>
+    ${used?`<a href="#" data-act="editPost" data-id="${used.id}" class="cnt">เปิดคอนเทนต์ (${STAGE_N[stageOf(used)]})</a>`:`<button class="btn sm" data-act="ideaPlan" data-id="${x.id}">→ ส่งไปวางแผน</button>`}</div>`}).join("")||`<div class="empty" style="grid-column:1/-1">ยังไม่มีไอเดีย</div>`}</div>`;
+  const form=$("#ideaForm");const showThumb=()=>{$("#idThumbBox").innerHTML=ideaThumb?`<div class="row" style="align-items:flex-end"><img class="ideaThumbPrev" src="${ideaThumb}" alt="ภาพที่จะบันทึก"><button class="btn ghost sm" type="button" id="idThumbDel">ลบภาพ</button></div>`:"";const d=$("#idThumbDel");if(d)d.onclick=()=>{ideaThumb=null;showThumb()}};showThumb();
+  const take=async f=>{if(!f||!/^image\//.test(f.type)){toast("ต้องเป็นไฟล์รูปภาพ");return}const d=await shrinkImage(f).catch(()=>null);if(!d){toast("ภาพใหญ่เกินไป ลองแคปให้เล็กลง");return}ideaThumb=d;showThumb()};
+  $("#idImgBtn").onclick=async()=>take(await pickFile("image/*"));
+  form.addEventListener("paste",e=>{const it=[...(e.clipboardData?.items||[])].find(i=>i.type.startsWith("image/"));if(it){e.preventDefault();take(it.getAsFile())}});
+  form.addEventListener("dragover",e=>{e.preventDefault();form.classList.add("drag")});form.addEventListener("dragleave",()=>form.classList.remove("drag"));
+  form.addEventListener("drop",e=>{e.preventDefault();form.classList.remove("drag");take(e.dataTransfer.files[0])});
+  form.onsubmit=async e=>{e.preventDefault();const t=V("idT");const u=V("idU");if(!t){toast("พิมพ์ไอเดียก่อน");return}if(u&&!/^https?:\/\//i.test(u)){toast("ลิงก์ต้องขึ้นต้นด้วย http:// หรือ https://");return}
+    if(S.ideas.some(i=>i.title.trim().toLowerCase()===t.toLowerCase())){toast("มีไอเดียนี้แล้ว");return}
+    try{await dbAdd(COL.ideas,{title:t,pillar:V("idP"),note:V("idN"),url:u,thumb:ideaThumb||null});ideaThumb=null;["idT","idN","idU"].forEach(i=>$("#"+i).value="");showThumb();toast("เพิ่มไอเดียแล้ว")}catch(err){toast(dbErr(err))}}};
+ACT.ideaEdit=el=>{const x=S.ideas.find(i=>i.id===el.dataset.id);if(!x)return;let th=x.thumb||null;
+  openDlg({title:"แก้ไขไอเดีย",body:`${fld("ไอเดีย","ieT",x.title)}<div class="row">${fld("Pillar","ieP",x.pillar,"text","list='pillarList2'")}${fld("โน้ต","ieN",x.note)}</div>${fld("ลิงก์ตัวอย่าง","ieU",x.url,"url","placeholder='https://'")}
+    <div class="row"><button class="btn" type="button" id="ieImg">🖼 เปลี่ยนภาพ</button><button class="btn ghost" type="button" id="ieDel">ลบภาพ</button></div><div id="ieBox"></div><div class="cnt">วางภาพด้วย Ctrl+V ในหน้าต่างนี้ได้</div>`,
+    onOpen:()=>{const sh=()=>$("#ieBox").innerHTML=th?`<img class="ideaThumbPrev" src="${th}" alt="ภาพไอเดีย">`:`<div class="cnt">ไม่มีภาพ (จะใช้ภาพจากลิงก์ถ้ามี)</div>`;sh();
+      const take=async f=>{if(!f||!/^image\//.test(f.type))return;const d=await shrinkImage(f).catch(()=>null);if(!d){toast("ภาพใหญ่เกินไป");return}th=d;sh()};
+      $("#ieImg").onclick=async()=>take(await pickFile("image/*"));$("#ieDel").onclick=()=>{th=null;sh()};
+      $("#dlgBody").addEventListener("paste",e=>{const it=[...(e.clipboardData?.items||[])].find(i=>i.type.startsWith("image/"));if(it){e.preventDefault();take(it.getAsFile())}})},
+    foot:["|",{label:"ยกเลิก"},{label:"บันทึก",cls:"primary",act:async()=>{const u=V("ieU");if(!V("ieT")){toast("ใส่ไอเดีย");return false}if(u&&!/^https?:\/\//i.test(u)){toast("ลิงก์ต้องขึ้นต้นด้วย http(s)://");return false}
+      try{await dbUpd(COL.ideas,x.id,{title:V("ieT"),pillar:V("ieP"),note:V("ieN"),url:u,thumb:th})}catch(e){toast(dbErr(e));return false}toast("บันทึกแล้ว")}}]})};
