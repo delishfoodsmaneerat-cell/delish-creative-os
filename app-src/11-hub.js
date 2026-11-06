@@ -352,7 +352,7 @@ function arParse(text){text=String(text||"").replace(/^\uFEFF/,"");let rows=[];
   const i=text.indexOf("window.SNAPSHOT");
   if(i>=0){const s=text.indexOf("{",i),e=text.indexOf("<\/script>",s);let j;try{j=JSON.parse(text.slice(s,e).trim().replace(/;\s*$/,""))}catch(err){return{err:"อ่านข้อมูลในไฟล์ HTML ไม่ได้"}}
     rows=(j.rows||[]).filter(a=>Array.isArray(a)&&a.length>=15).map(a=>({d:a[0],ch:a[1],cp:a[2],ob:a[3],v:a.slice(4,15).map(Number)}));
-    return rows.length?{rows,signups:j.settings?.extra?.byMonth||{},at:j.at}:{err:"ไม่พบแถวข้อมูลในไฟล์"}}
+    return rows.length?{rows,signups:j.settings?.extra?.byMonth||{},webCamps:j.settings?.extra?.webCamps||[],at:j.at}:{err:"ไม่พบแถวข้อมูลในไฟล์"}}
   const c=parseCSV(text);if(c.length<2)return{err:"ไม่พบข้อมูล ต้องเป็นไฟล์ index.html หรือ CSV ที่ส่งออกจากระบบรายงานโฆษณา"};
   const h=c[0].map(x=>x.trim().toLowerCase());const ix=k=>h.indexOf(k);
   if(ix("date")<0||ix("campaign")<0||ix("spend")<0)return{err:"CSV ต้องมีคอลัมน์ date, channel, campaign, spend (รูปแบบส่งออกของระบบรายงานโฆษณา)"};
@@ -366,16 +366,18 @@ function arMonthly(rows,fname){const g=new Map();
   return[...g.values()].map(x=>{const d={date:"",month:x.month,platform:x.platform,campaign:x.campaign,objective:x.objective,channelName:x.channel,rangeFrom:x.from,rangeTo:x.to,days:x.days,
       source:`รายงานโฆษณา${fname?" · "+fname:""} · รวมรายเดือน`};
     AR_MET.forEach((k,i)=>{const v=Math.round(x.t[i]*100)/100;d[k]=k==="spend"?v:(v?v:null)});return{id:"A-"+hash(adKey(d)),data:d}})}
-ACT.adsReportImport=()=>{let fname="",parsed=null;
+let arExtra={signups:{},webCamps:[]};
+ACT.adsReportImport=()=>{let fname="",parsed=null;arExtra={signups:{},webCamps:[]};
   openDlg({title:"นำเข้าจากระบบรายงานโฆษณา",wide:true,body:`<div class="row"><button class="btn" id="arPick" type="button">เลือกไฟล์ index.html, .csv หรือ .json</button><span class="cnt" id="arFn"></span></div>
     <div class="cnt" style="margin-top:6px">ใช้ไฟล์ index.html ที่ดาวน์โหลดจากระบบรายงานโฆษณา หรือ CSV ที่ส่งออกจากระบบนั้น ระบบจะรวมเป็นรายเดือนต่อแคมเปญ นำเข้าซ้ำได้ เดือนที่มีอยู่แล้วจะถูกอัปเดตเป็นตัวเลขล่าสุด ไม่สร้างแถวซ้ำ</div><div id="arPrev" style="margin-top:10px"></div>`,
     onOpen:()=>{$("#arPick").onclick=async()=>{const f=await pickFile(".html,.htm,.csv,.json,text/html,text/csv,application/json");if(!f)return;fname=f.name;$("#arFn").textContent=f.name;const r=arParse(await f.text());
       if(r.err){parsed=null;$("#arPrev").innerHTML=`<div class="note bad">${esc(r.err)}</div>`;return}
-      parsed=r.docs?r.docs.map(({id,data})=>{const{createdAt,updatedAt,createdBy,updatedBy,...d}=data;return{id,data:d}}):arMonthly(r.rows,fname);const nw=parsed.filter(x=>!S.ads.some(a=>a.id===x.id)).length;const tot=parsed.reduce((a,x)=>a+(x.data.spend||0),0);
+      arExtra={signups:r.signups||{},webCamps:(r.webCamps||[]).map(s=>s.trim())};parsed=r.docs?r.docs.map(({id,data})=>{const{createdAt,updatedAt,createdBy,updatedBy,...d}=data;return{id,data:d}}):arMonthly(r.rows,fname);const nw=parsed.filter(x=>!S.ads.some(a=>a.id===x.id)).length;const tot=parsed.reduce((a,x)=>a+(x.data.spend||0),0);
       $("#arPrev").innerHTML=`<div class="note">พบ ${r.rows?r.rows.length+" แถวรายวัน →":""} ${parsed.length} แถวรายเดือน (ใหม่ ${nw} · อัปเดต ${parsed.length-nw}) · Spend รวม ${baht(tot)}</div>
       <div class="tablewrap"><table><thead><tr><th>เดือน</th><th>แพลตฟอร์ม</th><th>แคมเปญ</th><th>เป้าหมาย</th><th class="r">Spend</th><th class="r">ข้อความ</th><th class="r">Leads</th><th class="r">ยอดขาย</th></tr></thead><tbody>${parsed.map(({data:d})=>`<tr><td>${thMonth(d.month)}</td><td>${esc(PLAT[d.platform]||d.platform)}</td><td>${esc(d.campaign)}</td><td>${esc(AR_OBJ[d.objective]||d.objective||"-")}</td><td class="r num">${baht(d.spend)}</td><td class="r num">${fmtN(d.messages)}</td><td class="r num">${fmtN(d.leads)}</td><td class="r num">${baht(d.revenue)}</td></tr>`).join("")}</tbody></table></div>`}},
     foot:["|",{label:"ยกเลิก"},{label:"นำเข้า",cls:"primary",act:async()=>{if(!parsed){toast("เลือกไฟล์ก่อน");return false}let add=0,up=0,skip=0;
-      try{for(const{id,data}of parsed){const ex=S.ads.find(a=>a.id===id);if(ex?.manual&&!data.manual){skip++;continue}if(ex){const{verified,...rest}=data;await dbUpd(COL.ads,id,rest);up++}else{await dbSetNew(COL.ads,id,data);add++}}toast(`นำเข้าใหม่ ${add} · อัปเดต ${up} แถว${skip?` · ข้ามแถวที่ทีมแก้ตัวเลขเอง ${skip}`:""}`)}catch(e){toast(dbErr(e));return false}}}]})};
+      try{for(const{id,data}of parsed){const ex=S.ads.find(a=>a.id===id);if(ex?.manual&&!data.manual){skip++;continue}if(arExtra.webCamps.length)data.web=arExtra.webCamps.includes(String(data.campaign).trim());if(ex){const{verified,...rest}=data;await dbUpd(COL.ads,id,rest);up++}else{await dbSetNew(COL.ads,id,data);add++}}
+        for(const[m,v]of Object.entries(arExtra.signups)){if(!/^\d{4}-\d{2}$/.test(m)||N(v)==null)continue;const ex=S.admonths.find(x=>x.id===m);if(ex?.manual)continue;if(ex)await dbUpd(COL.admonths,m,{signups:N(v),source:"รายงานโฆษณา"});else await dbSetNew(COL.admonths,m,{month:m,signups:N(v),source:"รายงานโฆษณา"})}toast(`นำเข้าใหม่ ${add} · อัปเดต ${up} แถว${skip?` · ข้ามแถวที่ทีมแก้ตัวเลขเอง ${skip}`:""}`)}catch(e){toast(dbErr(e));return false}}}]})};
 const _adsReportBase=adsReport;
 adsReport=function(){_adsReportBase();const b=$('#adsBody [data-act="adsImport"]');if(b)b.insertAdjacentHTML("beforebegin",`<button class="btn" data-act="adsReportImport">นำเข้าจากระบบรายงานโฆษณา</button>`);
   const rows=adsRows();const has=k=>rows.some(r=>r[k]!=null);if(!["messages","views","engagement","followers","orders","reach","salesLeads","storeSales"].some(has))return;
@@ -387,3 +389,76 @@ adsReport=function(){_adsReportBase();const b=$('#adsBody [data-act="adsImport"]
 // Cost ratios use only the spend of rows that report that metric (a row without clicks must not inflate CPC).
 adsSum=function(rows){const a=k=>agg(rows,k);const sp=a("spend"),cl=a("clicks"),ld=a("leads"),rv=a("revenue"),vr=a("verified");const spOf=k=>agg(rows.filter(r=>r[k]!=null&&r[k]!==""),"spend").sum;
   return{sp,cl,ld,rv,vr,cpc:ratio(spOf("clicks"),cl.sum),cpl:ratio(spOf("leads"),ld.sum),roas:ratio(rv.sum,spOf("revenue")),roasV:ratio(vr.sum,spOf("verified"))}};
+
+// ================= ADS: visual insights (website funnel · sales & ROAS · cost vs rate) =================
+S.admonths=[];COL.admonths="ad_months";
+const AD_PAL=["var(--accent)","var(--mango)","var(--sky)","var(--plum)","var(--chili)","var(--ig)","var(--muted)"];
+const fmtB=v=>v==null?"–":"฿"+fmtN(v,v<100?2:0);
+function niceMax(v){if(!(v>0))return 1;const p=10**Math.floor(Math.log10(v));const n=v/p;return(n<=1?1:n<=2?2:n<=2.5?2.5:n<=5?5:10)*p}
+function adWebChart(){const rows=S.ads.filter(r=>!S.ui.adsPlat||r.platform===S.ui.adsPlat);
+  const months=[...new Set(rows.map(r=>r.month).concat(S.admonths.map(x=>x.month)))].filter(Boolean).sort();if(!months.length)return"";
+  const webN=rows.filter(r=>r.web).length;
+  const D=months.map(m=>{const w=rows.filter(r=>r.month===m&&r.web),o=rows.filter(r=>r.month===m&&!r.web);const sp=agg(w,"spend").sum;
+    const ld=w.some(r=>r.salesLeads!=null||r.leads!=null)?w.reduce((a,r)=>a+(r.salesLeads??r.leads??0),0):null;const su=N(S.admonths.find(x=>x.month===m)?.signups);
+    return{m,ld,su,sp,cpl:ratio(sp,ld),cps:ratio(sp,su),b2c:agg(o,"spend").sum}});
+  const W=640,H=250,L=40,R=52,T=16,B=30,n=D.length,gw=(W-L-R)/n,bw=Math.min(34,gw/3);
+  const yM=niceMax(Math.max(1,...D.map(d=>Math.max(d.ld||0,d.su||0)))),cM=niceMax(Math.max(1,...D.map(d=>Math.max(d.cpl||0,d.cps||0))));
+  const y=v=>T+(1-v/yM)*(H-T-B),yc=v=>T+(1-v/cM)*(H-T-B),cx=i=>L+gw*i+gw/2;
+  const line=(k,c,dash)=>{const pts=D.map((d,i)=>d[k]==null?null:[cx(i),yc(d[k])]).filter(Boolean);return pts.length?`<path d="M${pts.map(p=>p.join(" ")).join(" L")}" fill="none" stroke="${c}" stroke-width="2.5" ${dash?'stroke-dasharray="6 5"':""}/>${pts.map(p=>`<circle cx="${p[0]}" cy="${p[1]}" r="5" fill="${c}" stroke="var(--surface)" stroke-width="2"/>`).join("")}`:""};
+  const svg=`<svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;height:auto" role="img" aria-label="รายชื่อและสมัครสมาชิกจากแคมเปญเว็บไซต์ พร้อมต้นทุนต่อหน่วย">
+   ${[0,.2,.4,.6,.8,1].map(g=>`<line x1="${L}" x2="${W-R}" y1="${y(yM*g)}" y2="${y(yM*g)}" stroke="var(--line)"/><text x="${L-8}" y="${y(yM*g)+4}" text-anchor="end" font-size="11" fill="var(--muted)">${fmtN(yM*g)}</text><text x="${W-R+8}" y="${yc(cM*g)+4}" font-size="11" fill="var(--muted)">฿${fmtN(cM*g)}</text>`).join("")}
+   ${D.map((d,i)=>`${d.ld!=null?`<rect x="${cx(i)-bw-2}" y="${y(d.ld)}" width="${bw}" height="${H-B-y(d.ld)}" rx="4" fill="var(--mango)"><title>${thMonth(d.m)} รายชื่อ ${d.ld}</title></rect><text x="${cx(i)-bw/2-2}" y="${y(d.ld)-5}" text-anchor="middle" font-size="11" fill="var(--ink)">${fmtN(d.ld)}</text>`:""}${d.su!=null?`<rect x="${cx(i)+2}" y="${y(d.su)}" width="${bw}" height="${H-B-y(d.su)}" rx="4" fill="var(--accent)"><title>${thMonth(d.m)} สมัครสมาชิก ${d.su}</title></rect><text x="${cx(i)+bw/2+2}" y="${y(d.su)-5}" text-anchor="middle" font-size="11" fill="var(--ink)">${fmtN(d.su)}</text>`:""}<text x="${cx(i)}" y="${H-10}" text-anchor="middle" font-size="12" fill="var(--muted)">${["ม.ค.","ก.พ.","มี.ค.","เม.ย.","พ.ค.","มิ.ย.","ก.ค.","ส.ค.","ก.ย.","ต.ค.","พ.ย.","ธ.ค."][+d.m.slice(5)-1]} ${String(+d.m.slice(0,4)+543).slice(2)}</text>`).join("")}
+   ${line("cpl","var(--chili)",true)}${line("cps","var(--sky)")}</svg>`;
+  const tot={ld:D.reduce((a,d)=>a+(d.ld||0),0),su:D.reduce((a,d)=>a+(d.su||0),0),sp:D.reduce((a,d)=>a+(d.sp||0),0),b2c:D.reduce((a,d)=>a+(d.b2c||0),0)};
+  return`<div class="panel"><div class="ph"><div><h2>Website: รายชื่อส่งทีมขาย & สมัครสมาชิก</h2><div class="cnt">ต้นทุนคิดจากงบแคมเปญที่ยิงเข้าเว็บไซต์เท่านั้น${webN?`: ${[...new Set(rows.filter(r=>r.web).map(r=>r.campaign))].map(esc).join(", ")}`:""} · แคมเปญอื่นนับเป็น B2C</div></div><button class="btn sm" data-act="adWebSet">ตั้งค่าแคมเปญเว็บ & สมัครสมาชิก</button></div>
+   ${webN||S.admonths.length?`${svg}<div class="legend"><span><span class="dot" style="background:var(--mango);border-radius:2px"></span>รายชื่อส่งทีมขาย</span><span><span class="dot" style="background:var(--accent);border-radius:2px"></span>สมัครสมาชิก</span><span><span class="dot" style="background:var(--chili)"></span>ต้นทุน/รายชื่อ (เส้นประ)</span><span><span class="dot" style="background:var(--sky)"></span>ต้นทุน/สมาชิก</span></div>
+   <div class="tablewrap" style="margin-top:10px"><table><thead><tr><th>เดือน</th><th class="r">รายชื่อส่งทีมขาย</th><th class="r">สมัครสมาชิก</th><th class="r">งบแคมเปญ Website</th><th class="r">ต้นทุน/รายชื่อ</th><th class="r">ต้นทุน/สมาชิก</th><th class="r">งบ B2C</th></tr></thead><tbody>
+   ${D.map(d=>`<tr><td>${thMonth(d.m)}</td><td class="r num">${d.ld==null?"–":fmtN(d.ld)}</td><td class="r num">${d.su==null?"–":fmtN(d.su)}</td><td class="r num">${d.sp==null?"–":fmtB(d.sp)}</td><td class="r num">${fmtB(d.cpl)}</td><td class="r num">${fmtB(d.cps)}</td><td class="r num">${d.b2c==null?"–":fmtB(d.b2c)}</td></tr>`).join("")}
+   <tr style="font-weight:700"><td>รวม</td><td class="r num">${fmtN(tot.ld)}</td><td class="r num">${fmtN(tot.su)}</td><td class="r num">${fmtB(tot.sp)}</td><td class="r num">${fmtB(ratio(tot.sp,tot.ld))}</td><td class="r num">${fmtB(ratio(tot.sp,tot.su))}</td><td class="r num">${fmtB(tot.b2c)}</td></tr></tbody></table></div>
+   <div class="cnt" style="margin-top:6px">รายชื่อส่งทีมขาย = ช่อง “ส่งเซล” ถ้ามี ไม่มีจึงใช้ Leads · สมัครสมาชิกมาจากไฟล์รายงานโฆษณาหรือที่กรอกเอง</div>`
+   :`<div class="empty">ยังไม่ได้ระบุว่าแคมเปญไหนยิงเข้าเว็บไซต์ กด “ตั้งค่าแคมเปญเว็บ & สมัครสมาชิก”</div>`}</div>`}
+
+function adRoasChart(rows){const g={};for(const r of rows){(g[r.campaign]=g[r.campaign]||[]).push(r)}
+  const C=Object.entries(g).map(([c,rs])=>{const sp=agg(rs,"spend").sum,rv=agg(rs,"revenue").sum,spR=agg(rs.filter(r=>r.revenue!=null),"spend").sum;return{c,sp,rv,roas:ratio(rv,spR),store:agg(rs,"storeSales").sum}}).filter(x=>x.sp!=null).sort((a,b)=>(b.rv||0)-(a.rv||0)||(b.sp||0)-(a.sp||0));
+  if(!C.length)return"";const W=640,L=180,R=20,T=34,rh=44,H=T+C.length*rh+26,xM=niceMax(Math.max(1,...C.map(x=>Math.max(x.rv||0,x.sp||0)))),rM=niceMax(Math.max(1,...C.map(x=>x.roas||0)));
+  const x=v=>L+v/xM*(W-L-R),xr=v=>L+v/rM*(W-L-R),xr2=v=>v.toFixed(2)+"x";
+  const svg=`<svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;height:auto" role="img" aria-label="ยอดขาย ค่าใช้จ่าย และ ROAS ตามแคมเปญ">
+   ${[0,.25,.5,.75,1].map(g=>`<line x1="${x(xM*g)}" x2="${x(xM*g)}" y1="${T-6}" y2="${H-24}" stroke="var(--line)"/><text x="${x(xM*g)}" y="${H-8}" text-anchor="middle" font-size="11" fill="var(--muted)">฿${fmtK(xM*g)}</text><text x="${xr(rM*g)}" y="${T-12}" text-anchor="middle" font-size="11" fill="var(--chili)">${+(rM*g).toFixed(1)}x</text>`).join("")}
+   ${C.map((d,i)=>{const y0=T+i*rh;return`<text x="${L-10}" y="${y0+20}" text-anchor="end" font-size="12" fill="var(--ink)">${esc(d.c.length>24?d.c.slice(0,23)+"…":d.c)}<title>${esc(d.c)}</title></text>
+     ${d.rv!=null?`<rect x="${L}" y="${y0+4}" width="${x(d.rv)-L}" height="16" rx="3" fill="var(--accent)"><title>ยอดขาย ${baht(d.rv)}</title></rect>`:""}<rect x="${L}" y="${y0+22}" width="${Math.max(1,x(d.sp)-L)}" height="12" rx="3" fill="var(--muted)" opacity=".55"><title>ค่าใช้จ่าย ${baht(d.sp)}</title></rect>
+     ${d.roas!=null?`<rect x="${xr(d.roas)-7}" y="${y0+12-7}" width="14" height="14" fill="var(--chili)" stroke="var(--surface)" stroke-width="2" transform="rotate(45 ${xr(d.roas)} ${y0+12})"><title>ROAS ${xr2(d.roas)}</title></rect>`:""}`}).join("")}</svg>`;
+  const tot={sp:agg(rows,"spend").sum,rv:agg(rows,"revenue").sum,spR:agg(rows.filter(r=>r.revenue!=null),"spend").sum};
+  return`<div class="panel"><h2>ยอดขายและ ROAS ตามแคมเปญ</h2><div class="g2" style="align-items:start">
+   <div>${svg}<div class="legend"><span><span class="dot" style="background:var(--chili);border-radius:1px;transform:rotate(45deg)"></span>ROAS (แกนบน)</span><span><span class="dot" style="background:var(--accent);border-radius:2px"></span>ยอดขาย</span><span><span class="dot" style="background:var(--muted);opacity:.55;border-radius:2px"></span>ค่าใช้จ่าย</span></div></div>
+   <div class="tablewrap"><table><thead><tr><th>แคมเปญ</th><th class="r">ยอดขาย</th><th class="r">งบ</th><th class="r">ROAS</th></tr></thead><tbody>${C.map(d=>`<tr><td>${esc(d.c)}${d.store!=null?`<div class="cnt">ยอดขายรวมร้าน ${baht(d.store)} (ไม่นับ)</div>`:""}</td><td class="r num">${d.rv==null?"–":fmtB(d.rv)}</td><td class="r num">${fmtB(d.sp)}</td><td class="r num">${d.roas==null?"–":d.roas.toFixed(2)+"x"}</td></tr>`).join("")}
+   <tr style="font-weight:700"><td>รวม</td><td class="r num">${fmtB(tot.rv)}</td><td class="r num">${fmtB(tot.sp)}</td><td class="r num">${ratio(tot.rv,tot.spR)==null?"–":ratio(tot.rv,tot.spR).toFixed(2)+"x"}</td></tr></tbody></table></div></div>
+   <div class="cnt" style="margin-top:6px">ROAS คิดจากแคมเปญที่มียอดขายเท่านั้น · แคมเปญที่ไม่มียอดขาย (เช่น ลีด B2B) จะไม่มีจุด ROAS</div></div>`}
+
+const AD_RES=[["msg","ข้อความ","messages","ต้นทุน/ข้อความ","ข้อความต่อยอดวิว","views"],["lead","ลีด","leads","ต้นทุน/ลีด","ลีดต่อยอดวิว","views"],["awa","ยอดวิว/การรับรู้","views","ต้นทุน/วิว","Engagement ต่อยอดวิว","views","engagement"],["trf","การเข้าชม","clicks","ต้นทุน/คลิก","คลิกต่อการแสดงผล","impressions"],["sal","ยอดขาย","orders","ต้นทุน/ออร์เดอร์","ออร์เดอร์ต่อการแสดงผล","impressions"]];
+function adBubbles(rows){const g={};for(const r of rows){const k=r.objective||"-";(g[k]=g[k]||[]).push(r)}
+  const cells=AD_RES.map(([ob,title,res,yl,xl,base,num])=>{const cs={};for(const r of g[ob]||[]){(cs[r.campaign]=cs[r.campaign]||[]).push(r)}
+    const P=Object.entries(cs).map(([c,rs])=>{const sp=agg(rs,"spend").sum,rv=agg(rs,res).sum,bs=agg(rs,base).sum??(base==="impressions"?agg(rs,"views").sum:agg(rs,"impressions").sum),nm=num?agg(rs,num).sum:rv;
+      return{c,sp,cost:ratio(sp,rv),rate:ratio(nm,bs)}}).filter(p=>p.cost!=null&&p.rate!=null);
+    if(!(g[ob]||[]).length)return"";
+    const W=300,H=200,L=52,B=34,T=10,R=24;const xM=niceMax(Math.max(...P.map(p=>p.rate),0)*1.15||0.01),yM=niceMax(Math.max(...P.map(p=>p.cost),0)*1.15||1),sM=Math.max(1,...P.map(p=>p.sp||0));
+    const x=v=>L+v/xM*(W-L-R),y=v=>T+(1-v/yM)*(H-T-B);
+    return`<div class="panel" style="padding:14px"><h3 style="font-size:15px;text-align:center;color:var(--accent);margin-bottom:4px">${title}</h3>${P.length?`<svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;height:auto" role="img" aria-label="${title}: ${yl} เทียบ ${xl}">
+      ${[0,.5,1].map(t=>`<line x1="${L}" x2="${W-R}" y1="${y(yM*t)}" y2="${y(yM*t)}" stroke="var(--line)"/><text x="${L-6}" y="${y(yM*t)+4}" text-anchor="end" font-size="10" fill="var(--muted)">฿${yM*t<1?(yM*t).toFixed(2):fmtN(yM*t)}</text><line x1="${x(xM*t)}" x2="${x(xM*t)}" y1="${T}" y2="${H-B}" stroke="var(--line)"/><text x="${x(xM*t)}" y="${H-B+14}" text-anchor="middle" font-size="10" fill="var(--muted)">${(xM*t*100).toFixed(xM*100<1?2:1)}%</text>`).join("")}
+      <text x="${(L+W-R)/2}" y="${H-4}" text-anchor="middle" font-size="10" fill="var(--muted)">${xl}</text><text x="12" y="${(T+H-B)/2}" text-anchor="middle" font-size="10" fill="var(--muted)" transform="rotate(-90 12 ${(T+H-B)/2})">${yl}</text>
+      ${P.map((p,i)=>`<circle cx="${x(p.rate)}" cy="${y(p.cost)}" r="${8+16*Math.sqrt((p.sp||0)/sM)}" fill="${AD_PAL[i%AD_PAL.length]}" fill-opacity=".55" stroke="${AD_PAL[i%AD_PAL.length]}" stroke-width="1.5"><title>${esc(p.c)} · ${yl} ${fmtB(p.cost)} · ${xl} ${(p.rate*100).toFixed(2)}% · งบ ${baht(p.sp)}</title></circle>`).join("")}</svg>
+      <div style="display:flex;flex-direction:column;gap:3px;font-size:12px">${P.map((p,i)=>`<span><span class="dot" style="background:${AD_PAL[i%AD_PAL.length]}"></span>${esc(p.c)} · ${fmtB(p.cost)} · ${baht(p.sp)}</span>`).join("")}</div>`
+      :`<div class="empty" style="font-size:12px">มีแคมเปญ แต่ขาดตัวเลขผลลัพธ์หรือฐาน (${res}/${base}) จึงพล็อตไม่ได้</div>`}</div>`}).filter(Boolean);
+  return cells.length?`<div class="panel"><div class="ph"><h2>แคมเปญเด่น: ต้นทุนต่อผลลัพธ์ เทียบอัตราผลลัพธ์</h2><span class="cnt">ขนาดวงกลม = งบ · มุมขวาล่างดีที่สุด (ถูกและได้ผลมาก)</span></div><div class="g3">${cells.join("")}</div></div>`:""}
+
+ACT.adWebSet=()=>{const camps=[...new Set(S.ads.map(r=>r.campaign))].sort();const months=[...new Set(S.ads.map(r=>r.month).concat(S.admonths.map(x=>x.month)))].filter(Boolean).sort();
+  openDlg({title:"แคมเปญเว็บไซต์ & ยอดสมัครสมาชิก",wide:true,body:`<label class="f">แคมเปญที่ยิงเข้าเว็บไซต์ (ใช้คิดต้นทุนต่อรายชื่อ/สมาชิก)</label><div class="chips">${camps.map((c,i)=>`<label class="chk"><input type="checkbox" name="adWeb" value="${i}" ${S.ads.some(r=>r.campaign===c&&r.web)?"checked":""}><span>${esc(c)}</span></label>`).join("")}</div>
+    <div class="row" style="margin-top:12px">${months.map(m=>fld("สมัครสมาชิก "+thMonth(m),"su_"+m.replace("-","_"),S.admonths.find(x=>x.month===m)?.signups??"","number","min='0'")).join("")}</div><div class="cnt">ช่องว่าง = ไม่มีข้อมูล ไม่ใช่ 0</div>`,
+    foot:["|",{label:"ยกเลิก"},{label:"บันทึก",cls:"primary",act:async()=>{try{const on=new Set($$('input[name="adWeb"]:checked').map(i=>camps[+i.value]));
+      for(const r of S.ads){const w=on.has(r.campaign);if(!!r.web!==w)await dbUpd(COL.ads,r.id,{web:w})}
+      for(const m of months){const v=N(V("su_"+m.replace("-","_")));const ex=S.admonths.find(x=>x.month===m);if(v==null){if(ex)await dbDel(COL.admonths,m);continue}
+        if(ex){if(N(ex.signups)!==v)await dbUpd(COL.admonths,m,{signups:v,source:"กรอกเอง",manual:true})}else await dbSetNew(COL.admonths,m,{month:m,signups:v,source:"กรอกเอง",manual:true})}toast("บันทึกแล้ว")}catch(e){toast(dbErr(e));return false}}}]})};
+
+const _adsReportV2=adsReport;
+adsReport=function(){_adsReportV2();if(!S.ads.length)return;const rows=adsRows();const host=$("#adsBody .kpis");if(!host)return;
+  const anchor=[...$$("#adsBody > .panel")].find(p=>/ผลลัพธ์ตามเป้าหมาย/.test(p.querySelector("h2")?.textContent||""))||host;
+  anchor.insertAdjacentHTML("afterend",adWebChart()+adRoasChart(rows)+adBubbles(rows))};
