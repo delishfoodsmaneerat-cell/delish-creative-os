@@ -367,9 +367,9 @@ function arMonthly(rows,fname){const g=new Map();
       source:`รายงานโฆษณา${fname?" · "+fname:""} · รวมรายเดือน`};
     AR_MET.forEach((k,i)=>{const v=Math.round(x.t[i]*100)/100;d[k]=k==="spend"?v:(v?v:null)});return{id:"A-"+hash(adKey(d)),data:d}})}
 ACT.adsReportImport=()=>{let fname="",parsed=null;
-  openDlg({title:"นำเข้าจากระบบรายงานโฆษณา",wide:true,body:`<div class="row"><button class="btn" id="arPick" type="button">เลือกไฟล์ index.html หรือ .csv</button><span class="cnt" id="arFn"></span></div>
+  openDlg({title:"นำเข้าจากระบบรายงานโฆษณา",wide:true,body:`<div class="row"><button class="btn" id="arPick" type="button">เลือกไฟล์ index.html, .csv หรือ .json</button><span class="cnt" id="arFn"></span></div>
     <div class="cnt" style="margin-top:6px">ใช้ไฟล์ index.html ที่ดาวน์โหลดจากระบบรายงานโฆษณา หรือ CSV ที่ส่งออกจากระบบนั้น ระบบจะรวมเป็นรายเดือนต่อแคมเปญ นำเข้าซ้ำได้ เดือนที่มีอยู่แล้วจะถูกอัปเดตเป็นตัวเลขล่าสุด ไม่สร้างแถวซ้ำ</div><div id="arPrev" style="margin-top:10px"></div>`,
-    onOpen:()=>{$("#arPick").onclick=async()=>{const f=await pickFile(".html,.htm,.csv,text/html,text/csv");if(!f)return;fname=f.name;$("#arFn").textContent=f.name;const r=arParse(await f.text());
+    onOpen:()=>{$("#arPick").onclick=async()=>{const f=await pickFile(".html,.htm,.csv,.json,text/html,text/csv,application/json");if(!f)return;fname=f.name;$("#arFn").textContent=f.name;const r=arParse(await f.text());
       if(r.err){parsed=null;$("#arPrev").innerHTML=`<div class="note bad">${esc(r.err)}</div>`;return}
       parsed=r.docs?r.docs.map(({id,data})=>{const{createdAt,updatedAt,createdBy,updatedBy,...d}=data;return{id,data:d}}):arMonthly(r.rows,fname);const nw=parsed.filter(x=>!S.ads.some(a=>a.id===x.id)).length;const tot=parsed.reduce((a,x)=>a+(x.data.spend||0),0);
       $("#arPrev").innerHTML=`<div class="note">พบ ${r.rows?r.rows.length+" แถวรายวัน →":""} ${parsed.length} แถวรายเดือน (ใหม่ ${nw} · อัปเดต ${parsed.length-nw}) · Spend รวม ${baht(tot)}</div>
