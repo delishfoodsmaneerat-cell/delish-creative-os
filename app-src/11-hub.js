@@ -568,3 +568,85 @@ const _dbAddA=dbAdd;dbAdd=function(col,data){if(col===COL.posts&&PA&&dlg.open&&$
 const _safeSaveA=safeSave;safeSave=function(col,id,data,base){if(col===COL.posts&&PA&&dlg.open&&$("#paBox"))data={...data,attachments:PA};return _safeSaveA(col,id,data,base)};
 // Keep nested "id" fields (attachments need them); only the record's own id is removed before saving.
 clean=function(o,depth=0){if(Array.isArray(o))return o.map(x=>clean(x,depth+1));if(o&&typeof o==="object"){const r={};for(const k in o)if(o[k]!==undefined&&!(k==="id"&&depth===0))r[k]=clean(o[k],depth+1);return r}return o};
+
+// Company site: put the Google sign-in for Search Console right next to the test button.
+ACT.gscLinkGoogle=()=>{if(typeof window.__cosRelinkGoogle==="function")window.__cosRelinkGoogle();else toast("ปุ่มนี้ใช้ได้บนเว็บบริษัทที่ล็อกอินด้วย Google")};
+const _seoViewG=VIEWS.seo;VIEWS.seo=()=>{_seoViewG();if(!HOSTED||typeof window.__cosRelinkGoogle!=="function")return;const t=$('#v-seo [data-act="gscTest"]');
+  if(t&&!$('#v-seo [data-act="gscLinkGoogle"]'))t.insertAdjacentHTML("beforebegin",`<button class="btn primary" data-act="gscLinkGoogle" title="เปิดหน้าต่าง Google เพื่ออนุญาตให้อ่านข้อมูล Search Console (หมดอายุทุกประมาณ 1 ชั่วโมง)">🔑 เชื่อม Google</button>`)};
+
+// ================= PURCHASING PRICE LIST (monthly Excel from the purchasing team) =================
+// Reads the .xlsx in the browser (no upload anywhere), keeps the list as a reference (price_items), and updates the
+// B2B price of registry products whose SKU matches the Item Code. New products are still added by the team.
+S.priceItems=[];COL.priceItems="price_items";
+async function unzipEntries(buf){const dv=new DataView(buf);let e=buf.byteLength-22;while(e>=0&&dv.getUint32(e,true)!==0x06054b50)e--;if(e<0)throw new Error("ไม่ใช่ไฟล์ .xlsx");
+  const n=dv.getUint16(e+10,true);let p=dv.getUint32(e+16,true);const out={};const td=new TextDecoder();
+  for(let i=0;i<n;i++){const method=dv.getUint16(p+10,true),csize=dv.getUint32(p+20,true),nl=dv.getUint16(p+28,true),xl=dv.getUint16(p+30,true),cl=dv.getUint16(p+32,true),lo=dv.getUint32(p+42,true);
+    const name=td.decode(new Uint8Array(buf,p+46,nl));const lnl=dv.getUint16(lo+26,true),lxl=dv.getUint16(lo+28,true);const data=new Uint8Array(buf,lo+30+lnl+lxl,csize);
+    out[name]={method,data};p+=46+nl+xl+cl}
+  return{names:Object.keys(out),text:async name=>{const f=out[name];if(!f)return null;if(f.method===0)return td.decode(f.data);
+    const s=new Blob([f.data]).stream().pipeThrough(new DecompressionStream("deflate-raw"));return await new Response(s).text()}}}
+async function readXlsx(file){const z=await unzipEntries(await file.arrayBuffer());const P=new DOMParser();const X=t=>P.parseFromString(t,"application/xml");
+  const ss=[];const sst=await z.text("xl/sharedStrings.xml");if(sst)for(const si of X(sst).getElementsByTagName("si"))ss.push([...si.getElementsByTagName("t")].map(t=>t.textContent).join(""));
+  const wb=X(await z.text("xl/workbook.xml"));const rels=X(await z.text("xl/_rels/workbook.xml.rels"));const relMap={};for(const r of rels.getElementsByTagName("Relationship"))relMap[r.getAttribute("Id")]=r.getAttribute("Target");
+  const sheets=[];for(const s of wb.getElementsByTagName("sheet")){const rid=s.getAttribute("r:id")||s.getAttributeNS("http://schemas.openxmlformats.org/officeDocument/2006/relationships","id");let t=relMap[rid]||"";t=t.replace(/^\/?xl\//,"").replace(/^\//,"");
+    const xml=await z.text("xl/"+t);if(!xml)continue;const rows=[];for(const r of X(xml).getElementsByTagName("row")){const ri=+r.getAttribute("r")-1;const row=[];
+      for(const c of r.getElementsByTagName("c")){const ref=c.getAttribute("r");const col=ref.replace(/\d+/g,"").split("").reduce((a,ch)=>a*26+ch.charCodeAt(0)-64,0)-1;const ty=c.getAttribute("t");const v=c.getElementsByTagName("v")[0]?.textContent;
+        let val=ty==="s"?ss[+v]:ty==="inlineStr"?[...c.getElementsByTagName("t")].map(t=>t.textContent).join(""):ty==="str"||ty==="e"?v:v!=null?Number(v):null;row[col]=val}
+      rows[ri]=row}sheets.push({name:s.getAttribute("name"),rows:[...rows].map(r=>r||[])})}
+  return sheets}
+const EN_M={JANUARY:1,FEBRUARY:2,MARCH:3,APRIL:4,MAY:5,JUNE:6,JULY:7,AUGUST:8,SEPTEMBER:9,OCTOBER:10,NOVEMBER:11,DECEMBER:12};
+function parsePriceSheets(sheets,fname){const items=[];
+  for(const sh of sheets){const R=sh.rows;let month="";for(const r of R.slice(0,4)){const t=String(r?.find(x=>typeof x==="string"&&/\b(19|20)\d\d\b/.test(x))||"");const m=t.toUpperCase().match(/(JANUARY|FEBRUARY|MARCH|APRIL|MAY|JUNE|JULY|AUGUST|SEPTEMBER|OCTOBER|NOVEMBER|DECEMBER)\D*((?:19|20)\d\d)/);if(m){month=m[2]+"-"+pad(EN_M[m[1]]);break}}
+    if(!month){const m=(sh.name+" "+fname).toUpperCase().match(/(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\w*\D{0,3}(\d{2,4})/);if(m){const mi=["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"].indexOf(m[1])+1;let y=+m[2];if(y<100)y+=2000;month=y+"-"+pad(mi)}}
+    const hi=R.findIndex(r=>r&&r.some(x=>/item\s*code/i.test(String(x||""))));if(hi<0)continue;const H=R[hi].map(x=>String(x||"").trim()),H2=(R[hi+1]||[]).map(x=>String(x||"").trim());
+    const ci=re=>H.findIndex(x=>re.test(x));const C={code:ci(/item\s*code/i),group:ci(/^group$/i),desc:ci(/description/i),unit:ci(/^unit$/i),price:ci(/unit\s*price/i),origin:ci(/origin/i),spec:ci(/^s[ep]{2}c/i)};
+    const packs=[];H2.forEach((x,i)=>{if(/packing\s*size/i.test(x)){let pr=-1,sp=-1;for(let j=i+1;j<Math.min(H2.length,i+4);j++){if(/packing\s*size/i.test(H2[j]))break;if(/price/i.test(H2[j])&&pr<0)pr=j;if(/spec/i.test(H2[j])&&sp<0)sp=j}packs.push({s:i,p:pr,sp})}});
+    let cat="";for(let i=hi+2;i<R.length;i++){const r=R[i];if(!r||!r.length)continue;const code=String(r[C.code]??"").trim();
+      if(!/^[A-Z]{1,4}\d{3,}/i.test(code)){const lab=r.find(x=>typeof x==="string"&&x.trim());if(lab&&r.filter(x=>x!=null&&x!=="").length<=2)cat=lab.trim();continue}
+      const num=v=>typeof v==="number"&&isFinite(v)?Math.round(v*100)/100:N(v);const txt=v=>v==null?"":String(v).replace(/ /g," ").replace(/\s+/g," ").trim();
+      items.push({code:code.toUpperCase(),name:txt(r[C.desc]),group:C.group>=0?txt(r[C.group]):code.slice(0,4),category:cat,unit:txt(r[C.unit]),unitPrice:num(r[C.price]),origin:C.origin>=0?txt(r[C.origin]):"",spec:C.spec>=0?txt(r[C.spec]):"",
+        packs:packs.map(pk=>({size:txt(r[pk.s]),price:pk.p>=0?num(r[pk.p]):null,note:pk.p>=0&&typeof r[pk.p]==="string"&&N(r[pk.p])==null?txt(r[pk.p]):"",spec:pk.sp>=0?txt(r[pk.sp]):""})).filter(x=>x.size),
+        month,sheet:sh.name})}}
+  const seen=new Map();for(const it of items)seen.set(it.code,it);return[...seen.values()]}
+const normName=s=>String(s||"").toLowerCase().replace(/\(.*?\)/g," ").replace(/[^a-z0-9ก-๙]+/g," ").trim();
+function suggestCode(p,items){const n=normName(p.name);if(n.length<3)return null;const words=n.split(" ").filter(w=>w.length>=3);const hits=items.filter(it=>{const d=normName(it.name);return words.length&&words.every(w=>d.includes(w))});return hits.length===1?hits[0]:null}
+
+ACT.priceImport=()=>{let items=null,fname="";
+  openDlg({title:"นำเข้าราคาจากทีมจัดซื้อ (Excel)",wide:true,body:`<div class="row"><button class="btn" id="plPick" type="button">เลือกไฟล์ .xlsx</button><span class="cnt" id="plFn"></span></div>
+    <div class="cnt" style="margin-top:6px">ระบบอ่านไฟล์ในเครื่องนี้ ไม่ได้ส่งไฟล์ไปที่อื่น · อัปเดต “ราคา B2B” และขนาดแพ็กของสินค้าในทะเบียนที่ SKU ตรงกับ Item Code · ไม่สร้างสินค้าใหม่ · เก็บรายการราคาทั้งหมดไว้ให้ค้นหาและเติมข้อมูลตอนเพิ่มสินค้าใหม่</div><div id="plPrev" style="margin-top:10px"></div>`,
+    onOpen:()=>{$("#plPick").onclick=async()=>{const f=await pickFile(".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");if(!f)return;fname=f.name;$("#plFn").textContent=f.name;$("#plPrev").innerHTML=`<div class="thinking"><div class="spin"></div>กำลังอ่านไฟล์…</div>`;
+      try{items=parsePriceSheets(await readXlsx(f),f.name)}catch(e){items=null;$("#plPrev").innerHTML=`<div class="note bad">อ่านไฟล์ไม่ได้: ${esc(e.message||e)} (ต้องเป็น .xlsx ที่มีคอลัมน์ Item Code)</div>`;return}
+      if(!items.length){$("#plPrev").innerHTML=`<div class="note bad">ไม่พบรายการสินค้า ต้องมีหัวตาราง Item Code, Description, Unit, Unit Price</div>`;return}
+      const byCode=new Map(items.map(i=>[i.code,i]));const match=S.products.filter(p=>p.sku&&byCode.has(String(p.sku).trim().toUpperCase()));const noSku=S.products.filter(p=>!p.sku).map(p=>({p,it:suggestCode(p,items)})).filter(x=>x.it);
+      const months=[...new Set(items.map(i=>i.month).filter(Boolean))];const bySheet={};items.forEach(i=>bySheet[i.sheet]=(bySheet[i.sheet]||0)+1);
+      $("#plPrev").innerHTML=`<div class="note">พบ <b>${items.length}</b> รายการ (${Object.entries(bySheet).map(([s,n])=>`${esc(s)} ${n}`).join(" · ")}) · เดือน ${months.map(thMonth).join(", ")||"ไม่ระบุ"} · ตรงกับสินค้าในทะเบียน <b>${match.length}</b> จาก ${S.products.length} รายการ</div>
+        ${match.length?`<div class="tablewrap"><table><thead><tr><th>สินค้าในทะเบียน</th><th>SKU</th><th class="r">ราคา B2B เดิม</th><th class="r">ราคาใหม่</th><th>หน่วย</th></tr></thead><tbody>${match.map(p=>{const it=byCode.get(String(p.sku).trim().toUpperCase());const ch=N(p.priceB2B)!==it.unitPrice;return`<tr><td>${esc(p.name)}</td><td>${esc(p.sku)}</td><td class="r num">${baht(N(p.priceB2B))}</td><td class="r num" style="${ch?"color:var(--accent);font-weight:700":""}">${baht(it.unitPrice)}</td><td>${esc(it.unit)}</td></tr>`}).join("")}</tbody></table></div>`:""}
+        ${noSku.length?`<div style="margin-top:10px"><b>สินค้าที่ยังไม่มี SKU แต่ชื่อใกล้เคียง</b> <span class="cnt">ติ๊กเพื่อใส่ SKU และราคาให้</span>${noSku.map((x,i)=>`<label class="chk" style="display:block;margin-top:6px"><input type="checkbox" name="plSug" value="${x.p.id}|${x.it.code}"><span>${esc(x.p.name)} → ${esc(x.it.code)} ${esc(x.it.name)} (${baht(x.it.unitPrice)}/${esc(x.it.unit)})</span></label>`).join("")}</div>`:""}`}},
+    foot:["|",{label:"ยกเลิก"},{label:"นำเข้า",cls:"primary",act:async()=>{if(!items){toast("เลือกไฟล์ก่อน");return false}const now=nowISO();const btn=$("#dlgFoot .primary");let n=0,up=0;
+      try{const src=`ราคาจัดซื้อ · ${fname}`;
+        for(const it of items){const ex=S.priceItems.find(x=>x.id===it.code);const d={...it,source:src,importedAt:now};if(ex)await dbUpd(COL.priceItems,it.code,d);else await dbSetNew(COL.priceItems,it.code,d);if(++n%25===0&&btn)btn.textContent=`กำลังบันทึก ${n}/${items.length}`}
+        const byCode=new Map(items.map(i=>[i.code,i]));const sug=new Map($$('input[name="plSug"]:checked').map(c=>c.value.split("|")));
+        for(const p of S.products){const code=sug.get(p.id)||String(p.sku||"").trim().toUpperCase();const it=byCode.get(code);if(!it)continue;
+          const hist=(p.priceHistory||[]).filter(h=>h.month!==it.month).concat(it.unitPrice!=null?[{month:it.month,price:it.unitPrice}]:[]).sort((a,b)=>a.month.localeCompare(b.month)).slice(-24);
+          await dbUpd(COL.products,p.id,{...(p.sku?{}:{sku:code}),priceB2B:it.unitPrice,priceUnit:it.unit,packs:it.packs,priceMonth:it.month,priceSource:src,priceHistory:hist,...(!p.origin&&it.origin?{origin:it.origin}:{})});up++}
+        toast(`บันทึกราคา ${items.length} รายการ · อัปเดตสินค้าในทะเบียน ${up} รายการ`)}catch(e){toast(dbErr(e));return false}}}]})};
+
+// Products page: import button + searchable price list.
+const _prodViewP=VIEWS.products;VIEWS.products=()=>{_prodViewP();{const q0=(S.ui.pq||"").toLowerCase();const list0=S.products.filter(p=>!q0||(p.name+" "+(p.sku||"")+" "+(p.origin||"")).toLowerCase().includes(q0)).sort((a,b)=>(a.name||"").localeCompare(b.name||"","th"));
+    const trs=$$("#v-products table")[0]?.querySelectorAll("tbody tr")||[];trs.forEach((tr,i)=>{const p=list0[i];const td=tr.children[4];if(!p||!td||p.priceB2B==null)return;
+      td.insertAdjacentHTML("beforeend",`<div class="cnt" style="white-space:nowrap" title="${esc(p.priceSource||"")}">B2B ${baht(p.priceB2B)}${p.priceUnit?"/"+esc(p.priceUnit):""}${p.priceMonth?" · "+["ม.ค.","ก.พ.","มี.ค.","เม.ย.","พ.ค.","มิ.ย.","ก.ค.","ส.ค.","ก.ย.","ต.ค.","พ.ย.","ธ.ค."][+p.priceMonth.slice(5)-1]:""}</div>`)})}const add=$('#v-products [data-act="newProduct"]');if(add&&!$('#v-products [data-act="priceImport"]'))add.insertAdjacentHTML("beforebegin",`<button class="btn" data-act="priceImport">⤒ นำเข้าราคาจัดซื้อ (Excel)</button> `);
+  if(!S.priceItems.length)return;const months=[...new Set(S.priceItems.map(i=>i.month).filter(Boolean))].sort();const q=(S.ui.plq||"").toLowerCase();
+  const list=S.priceItems.filter(i=>!q||(i.code+" "+i.name+" "+i.category).toLowerCase().includes(q)).sort((a,b)=>a.code.localeCompare(b.code));
+  $("#v-products").insertAdjacentHTML("beforeend",`<details class="panel" ${q?"open":""} id="plPanel"><summary style="cursor:pointer"><b>ราคาจากทีมจัดซื้อ</b> <span class="cnt">${S.priceItems.length} รายการ · ${months.map(thMonth).join(", ")} · ใช้ค้นหาและเติมข้อมูลตอนเพิ่มสินค้าใหม่</span></summary>
+    <input type="search" id="plQ" placeholder="ค้นหา Item Code / ชื่อ / กลุ่ม" value="${esc(S.ui.plq||"")}" data-live="1" style="margin:10px 0">
+    <div class="tablewrap" style="max-height:460px;overflow:auto"><table><thead><tr><th>Item Code</th><th>สินค้า</th><th>กลุ่ม</th><th class="r">ราคา/หน่วย</th><th>แพ็ก</th><th>ในทะเบียน</th></tr></thead><tbody>
+    ${list.slice(0,200).map(i=>{const inReg=S.products.find(p=>String(p.sku||"").toUpperCase()===i.code);return`<tr><td class="num">${esc(i.code)}</td><td>${esc(i.name)}${i.origin?` <span class="cnt">· ${esc(i.origin)}</span>`:""}</td><td class="cnt">${esc(i.category||i.group)}</td><td class="r num">${i.unitPrice==null?"ติดต่อเซล":baht(i.unitPrice)+"/"+esc(i.unit)}</td><td class="cnt">${(i.packs||[]).map(p=>`${esc(p.size)}${p.price!=null?" "+baht(p.price):p.note?" (ติดต่อเซล)":""}`).join(" · ")}</td><td>${inReg?`<span class="st ok">${esc(inReg.name)}</span>`:`<button class="btn sm" data-act="plAdd" data-code="${esc(i.code)}">＋ เพิ่ม</button>`}</td></tr>`}).join("")}</tbody></table></div>${list.length>200?`<div class="cnt">แสดง 200 จาก ${list.length} รายการ พิมพ์ค้นหาเพื่อกรอง</div>`:""}</details>`);
+  const qi=$("#plQ");qi.oninput=()=>{S.ui.plq=qi.value;clearTimeout(qi.t);qi.t=setTimeout(()=>{forceRender();const n=$("#plQ");if(n){n.focus();n.setSelectionRange(n.value.length,n.value.length)}},250)}};
+ACT.plAdd=el=>{const it=S.priceItems.find(i=>i.id===el.dataset.code);if(!it)return;openProduct(null);setTimeout(()=>plFill(it,true),0)};
+function plFill(it,force){const set=(id,v)=>{const e=$("#"+id);if(e&&v!=null&&v!==""&&(force||!e.value))e.value=v};set("pSku",it.code);set("pName",it.name);set("pUnit",it.unit==="KG"?"กิโลกรัม":it.unit==="PCE"?"ชิ้น":it.unit);set("pOrigin",it.origin);set("pPriceB2B",it.unitPrice);
+  const h=$("#plHint");if(h)h.innerHTML=`เติมจากราคาจัดซื้อ ${thMonth(it.month)} แล้ว · แพ็ก: ${(it.packs||[]).map(p=>esc(p.size)+(p.price!=null?" "+baht(p.price):"")).join(" · ")}`}
+// Product dialog: typing an Item Code in SKU offers to fill from the price list.
+const _openDlgP=openDlg;openDlg=function(o){_openDlgP(o);const sku=$("#dlgBody #pSku");if(!sku||!S.priceItems.length)return;
+  sku.closest(".row")?.insertAdjacentHTML("afterend",`<div class="cnt" id="plHint"></div>`);
+  const chk=()=>{const it=S.priceItems.find(i=>i.id===sku.value.trim().toUpperCase());$("#plHint").innerHTML=it?`พบในราคาจัดซื้อ: ${esc(it.name)} · ${baht(it.unitPrice)}/${esc(it.unit)} <button class="btn sm" type="button" id="plFillBtn">เติมข้อมูล</button>`:"";const b=$("#plFillBtn");if(b)b.onclick=()=>plFill(it,false)};
+  sku.addEventListener("input",chk);chk()};
