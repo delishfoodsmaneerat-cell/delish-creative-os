@@ -211,3 +211,179 @@ ${rising||"-"}
 ตอบ JSON เท่านั้น: {"text":"..."}`,{modelTier:"default"});
     const text=String(r?.text||"").trim();if(!text){toast("AI ไม่ได้ส่งข้อความกลับ");return}await dbUpd(COL.trends,s.id,{ai:{text,at:nowISO()}});toast("สรุปแล้ว")}
   catch(e){toast(aiErr(e))}finally{el.disabled=false;el.textContent="✦ สรุปด้วย AI"}};
+
+// ================= INSTAGRAM COMPETITOR ANALYSIS =================
+// Reads the dataset the team exports from Apify (Instagram Scraper / Instagram Profile Scraper). The app never logs in to
+// Instagram, stores no Apify token, and never invents a number: every metric is computed from imported posts.
+S.igPosts=[];S.igAcc=[];COL.igPosts="ig_posts";COL.igAcc="ig_accounts";
+const IG_TYPE={reel:"Reel",carousel:"Carousel",image:"Image",video:"Video"};
+const IG_TC={reel:"var(--plum)",carousel:"var(--sky)",image:"var(--accent)",video:"var(--mango)"};
+const IG_CAT=["สินค้า/โปรโมชัน","เมนู/สูตรอาหาร","ความรู้/สุขภาพ","ไลฟ์สไตล์","เบื้องหลัง/ฟาร์ม","รีวิว/ลูกค้า","อีเวนต์/แคมเปญ","อื่นๆ"];
+const IG_RULE=[["สินค้า/โปรโมชัน",/โปร|ลด|ส่วนลด|ราคา|sale|promo|discount|ฟรี|free|โค้ด|code|สั่งซื้อ|order|shop/i],["เมนู/สูตรอาหาร",/สูตร|เมนู|recipe|menu|ทำอาหาร|cook|ปรุง|จาน|salad|สลัด/i],["ความรู้/สุขภาพ",/ประโยชน์|วิตามิน|สุขภาพ|health|nutri|รู้หรือไม่|tips|เคล็ดลับ|วิธี/i],["รีวิว/ลูกค้า",/รีวิว|review|ลูกค้า|customer|ขอบคุณ|feedback/i],["อีเวนต์/แคมเปญ",/event|อีเวนต์|งาน|workshop|campaign|แคมเปญ|เทศกาล|ปีใหม่|คริสต์มาส|สงกรานต์/i],["เบื้องหลัง/ฟาร์ม",/ฟาร์ม|farm|เบื้องหลัง|behind|ปลูก|เก็บเกี่ยว|harvest|grow/i]];
+const IG_C=["var(--accent)","var(--mango)","var(--sky)","var(--plum)","var(--chili)","var(--ig)"];
+const igN=v=>{const n=N(v);return n==null||n<0?null:n};
+const igType=p=>{const pt=String(p.productType||"").toLowerCase(),t=String(p.type||"").toLowerCase();return pt==="clips"||pt==="reels"?"reel":t==="sidecar"||pt.includes("carousel")?"carousel":t==="video"?(pt==="igtv"?"video":"reel"):"image"};
+function igNorm(p,acc){const sc=p.shortCode||p.shortcode||(String(p.url||"").match(/\/(?:p|reel|tv)\/([^/?#]+)/)||[])[1];const user=String(p.ownerUsername||acc?.username||p.username||"").replace(/^@/,"").toLowerCase();
+  if(!sc||!user)return null;const ts=p.timestamp||p.takenAtTimestamp||p.taken_at;const d=typeof ts==="number"?new Date(ts*(ts<1e12?1000:1)):new Date(ts||"");
+  let tags=p.hashtags;if(!Array.isArray(tags))tags=Object.keys(p).filter(k=>/^hashtags\/\d+$/.test(k)).map(k=>p[k]).filter(Boolean);
+  return{id:"IG-"+sc,shortCode:sc,username:user,url:p.url||`https://www.instagram.com/p/${sc}/`,type:igType(p),caption:String(p.caption||"").slice(0,800),hashtags:(tags||[]).slice(0,30).map(String),
+    likes:igN(p.likesCount??p.likes),comments:igN(p.commentsCount??p.comments),views:igN(p.videoViewCount??p.videoPlayCount??p.playCount),postedAt:isNaN(d)?"":d.toISOString(),sponsored:!!p.isSponsored}}
+function igParse(text){text=text.replace(/^﻿/,"").trim();let rows;
+  if(/^[\[{]/.test(text)){let j;try{j=JSON.parse(text)}catch(e){return{err:"JSON ไม่ถูกต้อง"}}rows=Array.isArray(j)?j:[j]}
+  else{const c=parseCSV(text);if(c.length<2)return{err:"ไม่พบข้อมูล"};const h=c[0].map(x=>x.trim());rows=c.slice(1).filter(r=>r.some(Boolean)).map(r=>Object.fromEntries(h.map((k,i)=>[k,r[i]])))}
+  const posts=[],accs={};const addAcc=(o)=>{const u=String(o.username||"").replace(/^@/,"").toLowerCase();if(!u)return null;accs[u]={username:u,name:o.fullName||o.full_name||"",followers:igN(o.followersCount??o.followers),postsCount:igN(o.postsCount)};return accs[u]};
+  for(const r of rows){if(!r||typeof r!=="object")continue;
+    if(Array.isArray(r.latestPosts)||r.followersCount!=null&&!r.shortCode){const a=addAcc(r);for(const p of r.latestPosts||[]){const x=igNorm(p,a);if(x)posts.push(x)}continue}
+    const x=igNorm(r);if(x)posts.push(x)}
+  const seen=new Set();const uniq=posts.filter(p=>!seen.has(p.id)&&seen.add(p.id));
+  return uniq.length||Object.keys(accs).length?{posts:uniq,accs:Object.values(accs)}:{err:"ไม่พบโพสต์ Instagram ในไฟล์ (ต้องมี shortCode หรือ url และ ownerUsername)"}}
+const igEng=p=>p.likes==null&&p.comments==null?null:(p.likes||0)+(p.comments||0);
+const igAccOf=u=>S.igAcc.find(a=>a.username===u);
+const igER=p=>{const f=igAccOf(p.username)?.followers;const e=igEng(p);return f&&e!=null?e/f:null};
+const igCatOf=p=>p.category||null;
+const avgOf=a=>{const v=a.filter(x=>x!=null);return v.length?v.reduce((s,x)=>s+x,0)/v.length:null};
+function igRuleCat(cap){for(const[c,re]of IG_RULE)if(re.test(cap||""))return c;return"อื่นๆ"}
+const igColor=u=>{const us=igUsers();return IG_C[Math.max(0,us.indexOf(u))%IG_C.length]};
+const igUsers=()=>[...new Set(S.igAcc.filter(a=>!a.hidden).map(a=>a.username).concat(S.igPosts.map(p=>p.username)))].sort((a,b)=>(igAccOf(b)?.own?1:0)-(igAccOf(a)?.own?1:0)||a.localeCompare(b));
+function igFiltered(){const f=S.ui.igF||{};const days=+(f.days??90);const from=days?new Date(Date.now()-days*864e5).toISOString():"";const off=new Set(f.off||[]);
+  return S.igPosts.filter(p=>(!from||p.postedAt>=from)&&!off.has(p.username))}
+
+function igGroupBars(groups,keys,val,fmt){// groups:[{label}] keys: series users
+  const W=520,H=210,L=40,B=26,T=8;const all=groups.flatMap(g=>keys.map(k=>val(g,k))).filter(v=>v!=null);const mx=Math.max(1,...all);const gw=(W-L)/Math.max(1,groups.length);const bw=Math.min(22,(gw-12)/Math.max(1,keys.length));
+  const y=v=>T+(1-v/mx)*(H-T-B);
+  return`<svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;height:auto" role="img" aria-label="กราฟแท่งเปรียบเทียบ">${[0,.5,1].map(g=>`<line x1="${L}" x2="${W}" y1="${y(mx*g)}" y2="${y(mx*g)}" stroke="var(--line)"/><text x="${L-6}" y="${y(mx*g)+4}" text-anchor="end" font-size="10" fill="var(--muted)">${fmtK(Math.round(mx*g))}</text>`).join("")}
+  ${groups.map((g,gi)=>{const x0=L+gi*gw+(gw-bw*keys.length)/2;return keys.map((k,ki)=>{const v=val(g,k);if(v==null)return"";return`<rect x="${x0+ki*bw+1}" y="${y(v)}" width="${bw-2}" height="${H-B-y(v)}" rx="2" fill="${igColor(k)}"><title>@${esc(k)} · ${esc(g.label)}: ${fmt(v)}</title></rect>`}).join("")+`<text x="${L+gi*gw+gw/2}" y="${H-8}" text-anchor="middle" font-size="11" fill="var(--muted)">${esc(g.label)}</text>`}).join("")}</svg>`}
+function igLine(labels,series){const W=520,H=210,L=30,R=8,T=8,B=26;const n=labels.length;const mx=Math.max(1,...series.flatMap(s=>s.vals));const x=i=>L+(n<2?0:i*(W-L-R)/(n-1));const y=v=>T+(1-v/mx)*(H-T-B);
+  return`<svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;height:auto" role="img" aria-label="กราฟความถี่การโพสต์รายสัปดาห์">${[0,.5,1].map(g=>`<line x1="${L}" x2="${W-R}" y1="${y(mx*g)}" y2="${y(mx*g)}" stroke="var(--line)"/><text x="${L-6}" y="${y(mx*g)+4}" text-anchor="end" font-size="10" fill="var(--muted)">${+(mx*g).toFixed(1)}</text>`).join("")}
+  ${[0,n-1].filter((v,i,a)=>a.indexOf(v)===i).map(i=>`<text x="${x(i)}" y="${H-8}" text-anchor="${i?"end":"start"}" font-size="11" fill="var(--muted)">${esc(thDate(labels[i]))}</text>`).join("")}
+  ${series.map(s=>`<path d="${s.vals.map((v,i)=>(i?"L":"M")+x(i).toFixed(1)+" "+y(v).toFixed(1)).join("")}" fill="none" stroke="${igColor(s.u)}" stroke-width="2"><title>@${esc(s.u)}</title></path>`).join("")}</svg>`}
+const igLegend=us=>`<div class="legend">${us.map(u=>`<span><i style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${igColor(u)};margin-right:6px;vertical-align:middle"></i>@${esc(u)}${igAccOf(u)?.own?" (เรา)":""}</span>`).join("")}</div>`;
+const weekStart=iso=>{const d=new Date(iso);d.setHours(0,0,0,0);d.setDate(d.getDate()-((d.getDay()+6)%7));return ymd(d)};
+
+VIEWS.igcomp=()=>{const posts=igFiltered();const us=igUsers().filter(u=>posts.some(p=>p.username===u));const f=S.ui.igF||{};const days=f.days??90;
+  const head=`<div class="vhead"><div><h1>Instagram คู่แข่ง</h1><p>นำเข้าโพสต์จาก Apify แล้วดูว่าแต่ละแบรนด์ทำคอนเทนต์แบบไหน อะไรได้ Engagement สูง โพสต์บ่อยแค่ไหน และมีโอกาสอะไรให้เราต่อยอด</p></div><div class="row"><button class="btn" data-act="igHelp">วิธีดึงข้อมูลด้วย Apify</button><button class="btn" data-act="igAccounts">บัญชี (${igUsers().length})</button><button class="btn primary" data-act="igImport">⤒ นำเข้าข้อมูล</button></div></div>
+  <div class="note">ตัวเลขทั้งหมดคำนวณจากโพสต์ที่นำเข้าเท่านั้น ระบบไม่ล็อกอิน Instagram และไม่เก็บ Apify token · Engagement = Like + Comment (บัญชีที่ซ่อนยอด Like จะนับเฉพาะ Comment) · Engagement Rate ใช้ยอดผู้ติดตามจากไฟล์หรือที่กรอกในเมนู “บัญชี” ถ้าไม่มียอดผู้ติดตามจะแสดง –</div>
+  <div class="row"><div class="chips">${[[30,"30 วัน"],[90,"90 วัน"],[180,"180 วัน"],[0,"ทั้งหมด"]].map(([d,n])=>`<button class="btn sm ${+days===d?"primary":""}" data-act="igDays" data-d="${d}">${n}</button>`).join("")}</div><span class="spacer"></span><div class="chips">${igUsers().map(u=>`<label class="chk"><input type="checkbox" data-chg="igTog" value="${esc(u)}" ${(f.off||[]).includes(u)?"":"checked"}><span>@${esc(u)}</span></label>`).join("")}</div></div>`;
+  if(!posts.length){$("#v-igcomp").innerHTML=head+`<div class="panel"><div class="empty">${S.igPosts.length?"ไม่มีโพสต์ในช่วงหรือบัญชีที่เลือก":"ยังไม่มีข้อมูล กด “วิธีดึงข้อมูลด้วย Apify” แล้ว “⤒ นำเข้าข้อมูล”"}</div></div>`;return}
+  const by=u=>posts.filter(p=>p.username===u);
+  const kp=us.map(u=>{const ps=by(u);const a=igAccOf(u)||{};const ts=ps.map(p=>p.postedAt).filter(Boolean).sort();const wk=ts.length>1?Math.max(1,(new Date(ts[ts.length-1])-new Date(ts[0]))/(7*864e5)):null;
+    return{u,a,n:ps.length,likes:avgOf(ps.map(p=>p.likes)),com:avgOf(ps.map(p=>p.comments)),er:avgOf(ps.map(igER)),pw:wk?ps.length/wk:null,hidden:ps.filter(p=>p.likes==null).length}});
+  const types=Object.keys(IG_TYPE).filter(t=>posts.some(p=>p.type===t));
+  const cats=IG_CAT.filter(c=>posts.some(p=>igCatOf(p)===c));const unc=posts.filter(p=>!igCatOf(p)).length;
+  const catRows=cats.map(c=>{const ps=posts.filter(p=>igCatOf(p)===c);return{c,n:ps.length,e:avgOf(ps.map(igEng))}}).sort((a,b)=>(b.e||0)-(a.e||0));const cmx=Math.max(1,...catRows.map(r=>r.e||0));
+  const wks=[];if(posts.some(p=>p.postedAt)){const ts=posts.map(p=>p.postedAt).filter(Boolean).sort();let w=weekStart(ts[0]);const end=weekStart(ts[ts.length-1]);while(w<=end&&wks.length<60){wks.push(w);w=addDays(w,7)}}
+  const freq=us.map(u=>({u,vals:wks.map(w=>by(u).filter(p=>p.postedAt&&weekStart(p.postedAt)===w).length)}));
+  const top=posts.filter(p=>igEng(p)!=null).sort((a,b)=>igEng(b)-igEng(a)).slice(0,10);
+  const ai=S.igAcc.find(a=>a.username==="__insight")?.ai;
+  $("#v-igcomp").innerHTML=head+`
+  <div class="g3">${kp.map(k=>`<div class="panel" style="border-top:3px solid ${igColor(k.u)}"><div class="row" style="flex-wrap:nowrap"><b style="min-width:0;overflow:hidden;text-overflow:ellipsis">@${esc(k.u)}</b>${k.a.own?`<span class="st ok">เรา</span>`:""}<span class="spacer"></span><a class="cnt" href="https://www.instagram.com/${encodeURIComponent(k.u)}/" target="_blank" rel="noopener">เปิด ↗</a></div><div class="cnt">${esc(k.a.name||"")}${k.a.followers!=null?` · ผู้ติดตาม ${fmtK(k.a.followers)}`:""}</div>
+    <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px 10px;margin-top:12px"><div><div class="cnt">โพสต์</div><b style="font-family:var(--display);font-size:20px;font-variant-numeric:tabular-nums">${k.n}</b></div><div><div class="cnt">Like เฉลี่ย</div><b style="font-family:var(--display);font-size:20px;font-variant-numeric:tabular-nums">${k.likes==null?"–":fmtK(Math.round(k.likes))}</b>${k.hidden?`<div class="cnt">ซ่อนยอด ${k.hidden}</div>`:""}</div><div><div class="cnt">Comment เฉลี่ย</div><b style="font-family:var(--display);font-size:20px;font-variant-numeric:tabular-nums">${k.com==null?"–":fmtK(Math.round(k.com))}</b></div><div><div class="cnt">Eng. Rate</div><b style="font-family:var(--display);font-size:20px;font-variant-numeric:tabular-nums">${k.er==null?"–":pct(k.er)}</b></div><div><div class="cnt">โพสต์/สัปดาห์</div><b style="font-family:var(--display);font-size:20px;font-variant-numeric:tabular-nums">${k.pw==null?"–":k.pw.toFixed(1)}</b></div></div></div>`).join("")}</div>
+  <div class="g2"><div class="panel"><h2>Engagement เฉลี่ยตามประเภทคอนเทนต์</h2>${igGroupBars(types.map(t=>({label:IG_TYPE[t],t})),us,(g,u)=>avgOf(by(u).filter(p=>p.type===g.t).map(igEng)),v=>fmtN(Math.round(v)))}${igLegend(us)}
+      <div class="cnt" style="margin-top:6px">${types.map(t=>`${IG_TYPE[t]} ${posts.filter(p=>p.type===t).length} โพสต์`).join(" · ")}</div></div>
+    <div class="panel"><div class="ph"><h2>หมวดคอนเทนต์ที่ได้ Engagement สูง</h2><div class="row"><button class="btn sm" data-act="igCatAI">✦ จัดหมวดด้วย AI</button><button class="btn sm ghost" data-act="igCatRule" title="จัดหมวดจากคำสำคัญใน caption">จัดหมวดจากคำสำคัญ</button></div></div>
+      ${catRows.length?`<div class="bars">${catRows.map(r=>`<div class="bar"><span class="lab">${esc(r.c)}</span><div class="track"><div class="fill" style="width:${(r.e||0)/cmx*100}%"></div></div><span class="v">${r.e==null?"–":fmtK(Math.round(r.e))}</span></div>`).join("")}</div><div class="cnt" style="margin-top:6px">ค่าเฉลี่ย Engagement ต่อโพสต์ · ${catRows.map(r=>`${esc(r.c)} ${r.n}`).join(" · ")}</div>`:""}
+      ${unc?`<div class="cnt" style="margin-top:8px">ยังไม่จัดหมวด ${unc} โพสต์</div>`:""}</div></div>
+  <div class="g2"><div class="panel"><h2>ความถี่การโพสต์ (ต่อสัปดาห์)</h2>${wks.length>1?igLine(wks,freq)+igLegend(us):`<div class="empty">ต้องมีโพสต์มากกว่า 1 สัปดาห์</div>`}</div>
+    <div class="panel"><div class="ph"><h2>Key Insights & โอกาสคอนเทนต์</h2><button class="btn sm" data-act="igAI">✦ วิเคราะห์ด้วย AI</button></div>
+      ${ai?`<div class="cnt">สรุปโดย AI เมื่อ ${thDT(ai.at)} จาก ${ai.n} โพสต์ — อ่านจากตัวเลขในหน้านี้ ควรตรวจก่อนใช้</div><h3 style="font-size:14px;margin:10px 0 4px">Key Insights</h3><ol style="margin:0;padding-left:20px;line-height:1.7">${(ai.insights||[]).map(x=>`<li>${esc(x)}</li>`).join("")}</ol><h3 style="font-size:14px;margin:10px 0 4px">Content Opportunities</h3><ul style="margin:0;padding-left:20px;line-height:1.7">${(ai.opps||[]).map((x,i)=>`<li>${esc(x)} <button class="btn ghost sm" data-act="igOppIdea" data-i="${i}" title="ส่งไป Idea Vault">💡</button></li>`).join("")}</ul>`:`<div class="empty">กด “✦ วิเคราะห์ด้วย AI” เพื่อสรุปจุดเด่นของคู่แข่งและโอกาสของเรา${HOSTED?" (บนเว็บบริษัทต้องเปิดใช้ AI ก่อน)":""}</div>`}</div></div>
+  <div class="panel"><h2>Top 10 โพสต์ (Engagement สูงสุด)</h2><div style="overflow-x:auto"><table style="min-width:760px"><thead><tr><th>#</th><th>บัญชี</th><th>วันที่</th><th>ประเภท</th><th>หมวด</th><th>Caption</th><th class="r">Like</th><th class="r">Comment</th><th class="r">ER</th></tr></thead><tbody>
+    ${top.map((p,i)=>`<tr><td class="num">${i+1}</td><td style="white-space:nowrap"><span style="color:${igColor(p.username)}">●</span> @${esc(p.username)}</td><td style="white-space:nowrap">${thDate(p.postedAt)}</td><td><span class="ch" style="--c:${IG_TC[p.type]}">${IG_TYPE[p.type]}</span></td><td><select data-chg="igSetCat" data-id="${p.id}" aria-label="หมวด" style="max-width:140px"><option value="">–</option>${IG_CAT.map(c=>`<option ${igCatOf(p)===c?"selected":""}>${esc(c)}</option>`).join("")}</select></td><td style="max-width:320px"><a href="${esc(p.url)}" target="_blank" rel="noopener" style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(p.caption.slice(0,90)||"(ไม่มี caption)")}</a></td><td class="r num">${p.likes==null?"ซ่อน":fmtN(p.likes)}</td><td class="r num">${fmtN(p.comments)}</td><td class="r num">${pct(igER(p))}</td></tr>`).join("")}</tbody></table></div>
+    <div class="row" style="margin-top:8px"><span class="cnt">${posts.length} โพสต์ในช่วงที่เลือก · นำเข้าทั้งหมด ${S.igPosts.length} โพสต์</span><span class="spacer"></span><button class="btn sm" data-act="igCSV">⤓ ส่งออก CSV</button></div></div>`};
+
+ACT.igDays=el=>{S.ui.igF={...(S.ui.igF||{}),days:+el.dataset.d};forceRender()};
+ACT.igTog=el=>{const f=S.ui.igF||{};const off=new Set(f.off||[]);el.checked?off.delete(el.value):off.add(el.value);S.ui.igF={...f,off:[...off]};forceRender()};
+ACT.igSetCat=async el=>{try{await dbUpd(COL.igPosts,el.dataset.id,{category:el.value||null,catBy:el.value?"manual":null})}catch(e){toast(dbErr(e))}};
+ACT.igHelp=()=>openDlg({title:"ดึงโพสต์ Instagram ด้วย Apify",wide:true,body:`<ol style="margin:0;padding-left:20px;line-height:1.8">
+  <li>สมัคร/ล็อกอิน <a href="https://console.apify.com" target="_blank" rel="noopener">console.apify.com</a> แล้วเปิด Actor <a href="https://apify.com/apify/instagram-scraper" target="_blank" rel="noopener"><b>Instagram Scraper</b> (apify/instagram-scraper)</a></li>
+  <li>ช่อง <b>Instagram URLs</b> ใส่ลิงก์โปรไฟล์คู่แข่งและของเรา เช่น <code>https://www.instagram.com/ชื่อบัญชี/</code></li>
+  <li><b>What do you want to scrape</b> = Posts · <b>Max posts per profile</b> เริ่มที่ 30–50 · ตั้งวันเริ่มได้ที่ “Posts newer than” (ถ้ามี)</li>
+  <li>กด <b>Start</b> เมื่อเสร็จ ไปที่ <b>Export</b> เลือก <b>JSON</b> แล้วดาวน์โหลด</li>
+  <li>กลับมาหน้านี้ กด <b>⤒ นำเข้าข้อมูล</b> แล้วเลือกไฟล์ ระบบรวมโพสต์ซ้ำให้อัตโนมัติ (นำเข้าซ้ำได้ ตัวเลขจะอัปเดตเป็นล่าสุด)</li>
+  <li>ถ้าต้องการยอดผู้ติดตามสำหรับ Engagement Rate ใช้ Actor <b>Instagram Profile Scraper</b> แล้วนำเข้าไฟล์เดียวกันนี้ได้ หรือกรอกเองที่เมนู “บัญชี”</li></ol>
+  <div class="note" style="margin-top:12px"><b>ก่อนใช้งาน:</b> Apify คิดค่าบริการตามการใช้งาน (มีเครดิตฟรีรายเดือนในแพ็กเกจฟรี) ควรตรวจราคาล่าสุดและขออนุมัติก่อนตั้งรันอัตโนมัติ · ดึงเฉพาะข้อมูลสาธารณะของบัญชีแบรนด์ และปฏิบัติตามข้อกำหนดของ Instagram/Apify · ระบบเก็บเฉพาะข้อมูลโพสต์ (caption, ประเภท, Like, Comment, วันที่) ไม่เก็บคอมเมนต์หรือข้อมูลส่วนตัวของผู้ใช้ทั่วไป</div>
+  <div class="cnt" style="margin-top:8px"><b>อยากให้รันเอง:</b> ใน Apify ตั้ง <b>Schedule</b> ให้ Actor รันทุกสัปดาห์ได้ แต่การส่งข้อมูลเข้าแอปยังต้องกดนำเข้า การดึงเข้าแอปอัตโนมัติต้องเก็บ Apify token ฝั่งเซิร์ฟเวอร์ (Cloud Function บนแพ็กเกจ Blaze) ซึ่งยังไม่ได้เปิดใช้ ต้องอนุมัติค่าใช้จ่ายก่อน</div>`,foot:["|",{label:"ปิด"}]});
+
+ACT.igImport=()=>{let fname="";openDlg({title:"นำเข้าโพสต์ Instagram (Apify export)",wide:true,body:`<div class="row"><button class="btn" id="igPick" type="button">เลือกไฟล์ .json / .csv</button><span class="cnt" id="igFn"></span></div>${area("หรือวางข้อความ JSON/CSV","igTx","",7)}<div class="cnt">ระบุว่าบัญชีไหนเป็นของเราได้ที่ปุ่ม “บัญชี” หลังนำเข้า</div><div id="igPrev" class="cnt">ยังไม่มีข้อมูล</div>`,
+  onOpen:()=>{const prev=()=>{const t=$("#igTx").value;if(!t.trim()){$("#igPrev").textContent="ยังไม่มีข้อมูล";return}const r=igParse(t);if(r.err){$("#igPrev").innerHTML=`<span style="color:var(--chili)">${esc(r.err)}</span>`;return}
+      const us=[...new Set(r.posts.map(p=>p.username))];const nw=r.posts.filter(p=>!S.igPosts.some(x=>x.id===p.id)).length;
+      $("#igPrev").innerHTML=`พบ <b>${r.posts.length}</b> โพสต์ (ใหม่ ${nw} · อัปเดต ${r.posts.length-nw}) จาก ${us.length} บัญชี: ${us.map(u=>"@"+esc(u)).join(", ")}${r.accs.length?` · ข้อมูลโปรไฟล์ ${r.accs.length} บัญชี`:""}${r.posts.some(p=>p.likes==null)?` · ซ่อนยอด Like ${r.posts.filter(p=>p.likes==null).length} โพสต์`:""}`};
+    $("#igTx").oninput=prev;$("#igPick").onclick=async()=>{const f=await pickFile(".json,.csv,application/json,text/csv");if(!f)return;fname=f.name;$("#igFn").textContent=f.name;$("#igTx").value=await f.text();prev()}},
+  foot:["|",{label:"ยกเลิก"},{label:"นำเข้า",cls:"primary",act:async()=>{const r=igParse($("#igTx").value);if(r.err){toast(r.err);return false}let add=0,up=0;
+    try{const us=new Set(r.posts.map(p=>p.username));for(const a of r.accs)us.add(a.username);
+      for(const u of us){const a=r.accs.find(x=>x.username===u)||{};const ex=igAccOf(u);const d={username:u,...(a.name?{name:a.name}:{}),...(a.followers!=null?{followers:a.followers,followersAt:nowISO(),followersSrc:"Apify"}:{})};
+        if(ex)await dbUpd(COL.igAcc,ex.id,d);else await dbSetNew(COL.igAcc,"A-"+u.replace(/[^a-z0-9._]/g,"_"),{own:false,...d})}
+      for(const p of r.posts){const{id,...d}=p;const ex=S.igPosts.find(x=>x.id===id);const src={source:"Apify"+(fname?" · "+fname:""),fetchedAt:nowISO()};
+        if(ex){await dbUpd(COL.igPosts,id,{likes:d.likes,comments:d.comments,views:d.views,caption:d.caption,hashtags:d.hashtags,type:d.type,...src});up++}else{await dbSetNew(COL.igPosts,id,{...d,category:null,...src});add++}}
+      toast(`นำเข้าใหม่ ${add} · อัปเดต ${up} โพสต์`)}catch(e){toast(dbErr(e));return false}}}]})};
+
+ACT.igAccounts=()=>{const us=igUsers();openDlg({title:"บัญชีที่ติดตาม",wide:true,body:us.length?`<div class="cnt">ยอดผู้ติดตามใช้คำนวณ Engagement Rate ช่องว่าง = ไม่ทราบ</div>${us.map(u=>{const a=igAccOf(u)||{};const k=u.replace(/[^a-z0-9]/g,"_");return`<div class="row" style="align-items:flex-end"><b style="flex:1 1 140px">@${esc(u)}</b>${fld("ผู้ติดตาม","igF_"+k,a.followers??"","number","min='0'")}<label class="chk"><input type="checkbox" id="igO_${k}" ${a.own?"checked":""}><span>บัญชีเรา</span></label><button class="btn ghost sm" data-act="igDelAcc" data-u="${esc(u)}">ลบข้อมูล</button></div>${a.followersSrc?`<div class="cnt">ผู้ติดตามจาก ${esc(a.followersSrc)} ${thDT(a.followersAt)}</div>`:""}`}).join("")}`:`<div class="empty">ยังไม่มีบัญชี นำเข้าข้อมูลก่อน</div>`,
+  foot:["|",{label:"ยกเลิก"},{label:"บันทึก",cls:"primary",act:async()=>{try{for(const u of us){const k=u.replace(/[^a-z0-9]/g,"_");const fo=N(V("igF_"+k));const own=$("#igO_"+k).checked;const a=igAccOf(u);
+      const d={username:u,followers:fo,own,...(fo!==(a?.followers??null)?{followersSrc:"กรอกเอง",followersAt:nowISO()}:{})};if(a)await dbUpd(COL.igAcc,a.id,d);else await dbSetNew(COL.igAcc,"A-"+u.replace(/[^a-z0-9._]/g,"_"),d)}toast("บันทึกแล้ว")}catch(e){toast(dbErr(e));return false}}}]})};
+ACT.igDelAcc=el=>{const u=el.dataset.u;const ps=S.igPosts.filter(p=>p.username===u);openDlg({title:`ลบข้อมูล @${u}?`,body:`<p>ลบโพสต์ที่นำเข้า ${ps.length} โพสต์ และข้อมูลบัญชีนี้ ไม่กระทบ Instagram</p>`,foot:["|",{label:"ยกเลิก"},{label:"ลบ",cls:"danger",act:async()=>{try{for(const p of ps)await dbDel(COL.igPosts,p.id);const a=igAccOf(u);if(a)await dbDel(COL.igAcc,a.id);toast("ลบแล้ว")}catch(e){toast(dbErr(e))}}}]})};
+
+ACT.igCatRule=()=>{const ps=igFiltered().filter(p=>!p.category);if(!ps.length){toast("ทุกโพสต์ในช่วงนี้มีหมวดแล้ว");return}
+  openDlg({title:"จัดหมวดจากคำสำคัญ",body:`<p>จัดหมวด ${ps.length} โพสต์ที่ยังไม่มีหมวด โดยดูคำใน caption (เช่น “โปร”, “สูตร”, “ฟาร์ม”) ผลเป็นการเดาแบบง่าย แก้ทีละโพสต์ได้ในตาราง</p>`,foot:["|",{label:"ยกเลิก"},{label:"จัดหมวด",cls:"primary",act:async()=>{try{for(const p of ps)await dbUpd(COL.igPosts,p.id,{category:igRuleCat(p.caption),catBy:"rule"});toast(`จัดหมวด ${ps.length} โพสต์`)}catch(e){toast(dbErr(e))}}}]})};
+ACT.igCatAI=async el=>{if(!sample){toast("ยังไม่ได้เปิดใช้ AI ในเว็บนี้ ใช้ “จัดหมวดจากคำสำคัญ” แทนได้");return}const ps=igFiltered().filter(p=>p.catBy!=="manual").slice(0,120);if(!ps.length){toast("ไม่มีโพสต์ให้จัดหมวด");return}
+  el.disabled=true;let done=0;try{for(let i=0;i<ps.length;i+=40){const ch=ps.slice(i,i+40);el.textContent=`กำลังจัดหมวด ${i}/${ps.length}…`;
+      const r=await sample.json(`จัดหมวดโพสต์ Instagram ของแบรนด์อาหาร/ผักผลไม้ ตามหมวดที่กำหนดเท่านั้น: ${IG_CAT.join(" | ")}\nดูจาก caption และประเภทโพสต์ ถ้าไม่ชัดให้ใช้ "อื่นๆ"\n${ch.map(p=>`${p.id} [${IG_TYPE[p.type]}] ${p.caption.replace(/\s+/g," ").slice(0,300)}`).join("\n")}\nตอบ JSON เท่านั้น: {"items":[{"id":"...","category":"..."}]}`,{modelTier:"quick"});
+      for(const it of r?.items||[]){if(!IG_CAT.includes(it.category)||!ch.some(p=>p.id===it.id))continue;await dbUpd(COL.igPosts,it.id,{category:it.category,catBy:"ai"});done++}}toast(`AI จัดหมวด ${done} โพสต์ (แก้ได้ในตาราง)`)}
+  catch(e){toast(aiErr(e))}finally{el.disabled=false;el.textContent="✦ จัดหมวดด้วย AI"}};
+
+ACT.igAI=async el=>{if(!sample){toast("ยังไม่ได้เปิดใช้ AI ในเว็บนี้");return}const posts=igFiltered();if(!posts.length)return;const us=igUsers().filter(u=>posts.some(p=>p.username===u));
+  const lines=us.map(u=>{const ps=posts.filter(p=>p.username===u);const t=Object.keys(IG_TYPE).map(k=>{const x=ps.filter(p=>p.type===k);return x.length?`${IG_TYPE[k]} ${x.length} โพสต์ eng เฉลี่ย ${Math.round(avgOf(x.map(igEng))||0)}`:""}).filter(Boolean).join(", ");
+    const c=IG_CAT.map(k=>{const x=ps.filter(p=>p.category===k);return x.length?`${k} ${x.length} (eng ${Math.round(avgOf(x.map(igEng))||0)})`:""}).filter(Boolean).join(", ");
+    const er=avgOf(ps.map(igER));return`@${u}${igAccOf(u)?.own?" (แบรนด์เรา)":""}: ${ps.length} โพสต์, like เฉลี่ย ${Math.round(avgOf(ps.map(p=>p.likes))||0)}, comment เฉลี่ย ${Math.round(avgOf(ps.map(p=>p.comments))||0)}, ER ${er==null?"ไม่ทราบ":(er*100).toFixed(2)+"%"}; ประเภท: ${t}; หมวด: ${c||"ยังไม่จัด"}`}).join("\n");
+  const top=posts.filter(p=>igEng(p)!=null).sort((a,b)=>igEng(b)-igEng(a)).slice(0,10).map(p=>`@${p.username} [${IG_TYPE[p.type]}${p.category?"/"+p.category:""}] eng ${igEng(p)}: ${p.caption.replace(/\s+/g," ").slice(0,160)}`).join("\n");
+  el.disabled=true;el.textContent="กำลังวิเคราะห์…";
+  try{const r=await sample.json(`คุณคือนักวางกลยุทธ์คอนเทนต์ของ ${S.brand?.name||"Delish Foods"} (ผักผลไม้พรีเมียม วัตถุดิบหายาก ไมโครกรีน ดอกไม้กินได้ ลูกค้า B2B/B2C/B2M)\nข้อมูล Instagram ที่นำเข้า (คำนวณจริง ห้ามเติมตัวเลขที่ไม่มี):\n${lines}\nTop posts:\n${top}\nสรุปเป็นภาษาไทย 1) Key Insights 4-5 ข้อ (คู่แข่งเน้นอะไร คอนเทนต์ไหนได้ engagement สูง ความถี่การโพสต์ pattern) อ้างตัวเลขจากข้อมูล 2) Content Opportunities 3-5 ข้อที่แบรนด์เรานำไปทำได้จริง\nตอบ JSON เท่านั้น: {"insights":["..."],"opps":["..."]}`,{modelTier:"default"});
+    const ins=(r?.insights||[]).map(String).filter(Boolean),opps=(r?.opps||[]).map(String).filter(Boolean);if(!ins.length&&!opps.length){toast("AI ไม่ได้ส่งผลลัพธ์กลับ");return}
+    const a=igAccOf("__insight");const d={username:"__insight",hidden:true,ai:{insights:ins,opps,at:nowISO(),n:posts.length}};if(a)await dbUpd(COL.igAcc,a.id,d);else await dbSetNew(COL.igAcc,"A-__insight",d);toast("วิเคราะห์แล้ว")}
+  catch(e){toast(aiErr(e))}finally{el.disabled=false;el.textContent="✦ วิเคราะห์ด้วย AI"}};
+ACT.igOppIdea=async el=>{const t=igAccOf("__insight")?.ai?.opps?.[+el.dataset.i];if(!t)return;if(S.ideas.some(x=>x.title.trim().toLowerCase()===t.trim().toLowerCase())){toast("มีไอเดียนี้แล้ว");return}
+  try{await dbAdd(COL.ideas,{title:t.slice(0,200),pillar:"",note:"จากการวิเคราะห์ Instagram คู่แข่ง (AI)"});toast("ส่งไป Idea Vault แล้ว")}catch(e){toast(dbErr(e))}};
+ACT.igCSV=()=>{const ps=igFiltered();saveFile(`instagram-competitors-${today()}.csv`,"﻿"+toCSV([["username","postedAt","type","category","likes","comments","views","engagement","er","url","caption"],...ps.map(p=>[p.username,p.postedAt,IG_TYPE[p.type],p.category||"",p.likes,p.comments,p.views,igEng(p),igER(p)==null?"":(igER(p)*100).toFixed(2)+"%",p.url,p.caption])]))};
+
+// ================= ADS: import from the Ad Report tool (index.html snapshot or its CSV export) =================
+// The Ad Report tool stores daily rows spread from each exported period. Here they are summed per month × platform × campaign.
+const AR_MET=["spend","impressions","views","clicks","engagement","messages","followers","leads","orders","revenue","reach"];
+const AR_OBJ={msg:"ข้อความ",lead:"ลีด",sal:"ยอดขาย",eng:"Engagement",fol:"ผู้ติดตาม",trf:"Traffic",awa:"Awareness"};
+function arParse(text){text=String(text||"").replace(/^\uFEFF/,"");let rows=[];
+  if(/^\s*\[/.test(text)){try{const j=JSON.parse(text);const docs=j.filter(x=>x&&/^A-[a-z0-9]+$/.test(x.id||"")&&x.data&&/^\d{4}-\d{2}$/.test(x.data.month||"")&&x.data.campaign);if(docs.length)return{docs}}catch(e){}return{err:"ไฟล์ JSON ไม่ใช่รูปแบบข้อมูลโฆษณาของแอปนี้"}}
+  const i=text.indexOf("window.SNAPSHOT");
+  if(i>=0){const s=text.indexOf("{",i),e=text.indexOf("<\/script>",s);let j;try{j=JSON.parse(text.slice(s,e).trim().replace(/;\s*$/,""))}catch(err){return{err:"อ่านข้อมูลในไฟล์ HTML ไม่ได้"}}
+    rows=(j.rows||[]).filter(a=>Array.isArray(a)&&a.length>=15).map(a=>({d:a[0],ch:a[1],cp:a[2],ob:a[3],v:a.slice(4,15).map(Number)}));
+    return rows.length?{rows,signups:j.settings?.extra?.byMonth||{},at:j.at}:{err:"ไม่พบแถวข้อมูลในไฟล์"}}
+  const c=parseCSV(text);if(c.length<2)return{err:"ไม่พบข้อมูล ต้องเป็นไฟล์ index.html หรือ CSV ที่ส่งออกจากระบบรายงานโฆษณา"};
+  const h=c[0].map(x=>x.trim().toLowerCase());const ix=k=>h.indexOf(k);
+  if(ix("date")<0||ix("campaign")<0||ix("spend")<0)return{err:"CSV ต้องมีคอลัมน์ date, channel, campaign, spend (รูปแบบส่งออกของระบบรายงานโฆษณา)"};
+  const keys=["spend","impressions","views","clicks","engagement","messages","followers","leads","orders","sales","reach"];
+  rows=c.slice(1).filter(r=>r.some(Boolean)).map(r=>({d:normDate(r[ix("date")]),ch:r[ix("channel")]||"",cp:r[ix("campaign")]||"",ob:r[ix("objective")]||"",v:keys.map(k=>ix(k)<0?0:Number(r[ix(k)])||0)})).filter(r=>r.d&&r.cp);
+  return rows.length?{rows,signups:{}}:{err:"ไม่พบแถวที่มีวันที่และแคมเปญ"}}
+function arMonthly(rows,fname){const g=new Map();
+  for(const r of rows){const m=r.d.slice(0,7),p=normPlat(r.ch)||"other",k=m+"|"+p+"|"+r.cp.trim();let x=g.get(k);
+    if(!x){x={month:m,platform:p,campaign:r.cp.trim(),channel:r.ch,objective:r.ob,from:r.d,to:r.d,days:0,t:AR_MET.map(()=>0)};g.set(k,x)}
+    x.days++;if(r.d<x.from)x.from=r.d;if(r.d>x.to)x.to=r.d;r.v.forEach((v,i)=>x.t[i]+=v||0)}
+  return[...g.values()].map(x=>{const d={date:"",month:x.month,platform:x.platform,campaign:x.campaign,objective:x.objective,channelName:x.channel,rangeFrom:x.from,rangeTo:x.to,days:x.days,
+      source:`รายงานโฆษณา${fname?" · "+fname:""} · รวมรายเดือน`};
+    AR_MET.forEach((k,i)=>{const v=Math.round(x.t[i]*100)/100;d[k]=k==="spend"?v:(v?v:null)});return{id:"A-"+hash(adKey(d)),data:d}})}
+ACT.adsReportImport=()=>{let fname="",parsed=null;
+  openDlg({title:"นำเข้าจากระบบรายงานโฆษณา",wide:true,body:`<div class="row"><button class="btn" id="arPick" type="button">เลือกไฟล์ index.html หรือ .csv</button><span class="cnt" id="arFn"></span></div>
+    <div class="cnt" style="margin-top:6px">ใช้ไฟล์ index.html ที่ดาวน์โหลดจากระบบรายงานโฆษณา หรือ CSV ที่ส่งออกจากระบบนั้น ระบบจะรวมเป็นรายเดือนต่อแคมเปญ นำเข้าซ้ำได้ เดือนที่มีอยู่แล้วจะถูกอัปเดตเป็นตัวเลขล่าสุด ไม่สร้างแถวซ้ำ</div><div id="arPrev" style="margin-top:10px"></div>`,
+    onOpen:()=>{$("#arPick").onclick=async()=>{const f=await pickFile(".html,.htm,.csv,text/html,text/csv");if(!f)return;fname=f.name;$("#arFn").textContent=f.name;const r=arParse(await f.text());
+      if(r.err){parsed=null;$("#arPrev").innerHTML=`<div class="note bad">${esc(r.err)}</div>`;return}
+      parsed=r.docs?r.docs.map(({id,data})=>{const{createdAt,updatedAt,createdBy,updatedBy,...d}=data;return{id,data:d}}):arMonthly(r.rows,fname);const nw=parsed.filter(x=>!S.ads.some(a=>a.id===x.id)).length;const tot=parsed.reduce((a,x)=>a+(x.data.spend||0),0);
+      $("#arPrev").innerHTML=`<div class="note">พบ ${r.rows?r.rows.length+" แถวรายวัน →":""} ${parsed.length} แถวรายเดือน (ใหม่ ${nw} · อัปเดต ${parsed.length-nw}) · Spend รวม ${baht(tot)}</div>
+      <div class="tablewrap"><table><thead><tr><th>เดือน</th><th>แพลตฟอร์ม</th><th>แคมเปญ</th><th>เป้าหมาย</th><th class="r">Spend</th><th class="r">ข้อความ</th><th class="r">Leads</th><th class="r">ยอดขาย</th></tr></thead><tbody>${parsed.map(({data:d})=>`<tr><td>${thMonth(d.month)}</td><td>${esc(PLAT[d.platform]||d.platform)}</td><td>${esc(d.campaign)}</td><td>${esc(AR_OBJ[d.objective]||d.objective||"-")}</td><td class="r num">${baht(d.spend)}</td><td class="r num">${fmtN(d.messages)}</td><td class="r num">${fmtN(d.leads)}</td><td class="r num">${baht(d.revenue)}</td></tr>`).join("")}</tbody></table></div>`}},
+    foot:["|",{label:"ยกเลิก"},{label:"นำเข้า",cls:"primary",act:async()=>{if(!parsed){toast("เลือกไฟล์ก่อน");return false}let add=0,up=0,skip=0;
+      try{for(const{id,data}of parsed){const ex=S.ads.find(a=>a.id===id);if(ex?.manual&&!data.manual){skip++;continue}if(ex){const{verified,...rest}=data;await dbUpd(COL.ads,id,rest);up++}else{await dbSetNew(COL.ads,id,data);add++}}toast(`นำเข้าใหม่ ${add} · อัปเดต ${up} แถว${skip?` · ข้ามแถวที่ทีมแก้ตัวเลขเอง ${skip}`:""}`)}catch(e){toast(dbErr(e));return false}}}]})};
+const _adsReportBase=adsReport;
+adsReport=function(){_adsReportBase();const b=$('#adsBody [data-act="adsImport"]');if(b)b.insertAdjacentHTML("beforebegin",`<button class="btn" data-act="adsReportImport">นำเข้าจากระบบรายงานโฆษณา</button>`);
+  const rows=adsRows();const has=k=>rows.some(r=>r[k]!=null);if(!["messages","views","engagement","followers","orders","reach","salesLeads","storeSales"].some(has))return;
+  const k=$("#adsBody .kpis");const a=x=>agg(rows,x);const sp=a("spend").sum;const msg=a("messages"),ld=a("leads"),vw=a("views"),eg=a("engagement"),fo=a("followers"),od=a("orders"),rc=a("reach"),sl=a("salesLeads");const notes=rows.filter(r=>r.note||r.storeSales!=null);
+  const byObj={};for(const r of rows){const o=r.objective||"-";(byObj[o]=byObj[o]||[]).push(r)}
+  k.insertAdjacentHTML("afterend",`<div class="panel"><div class="ph"><h2>ผลลัพธ์ตามเป้าหมายโฆษณา</h2><span class="cnt">จากแถวที่นำเข้าจากระบบรายงานโฆษณา</span></div>
+   <div class="kpis"><div class="kpi"><small>ข้อความ (Messages)</small><b>${fmtN(msg.sum)}</b><em>ต้นทุน/ข้อความ ${baht(ratio(agg(rows.filter(r=>r.messages!=null),"spend").sum,msg.sum))}</em></div><div class="kpi"><small>Views</small><b>${fmtK(vw.sum)}</b></div><div class="kpi"><small>Engagement</small><b>${fmtK(eg.sum)}</b></div><div class="kpi"><small>ผู้ติดตามใหม่</small><b>${fmtN(fo.sum)}</b></div><div class="kpi"><small>คำสั่งซื้อ</small><b>${fmtN(od.sum)}</b></div><div class="kpi"><small>Reach (รวมแต่ละแคมเปญ)</small><b>${fmtK(rc.sum)}</b><em>${rc.n} แคมเปญ-เดือนที่มีข้อมูล</em></div><div class="kpi"><small>รายชื่อส่งให้เซล</small><b>${fmtN(sl.sum)}</b><em>${sl.n?`จากลีด ${fmtN(agg(rows.filter(r=>r.salesLeads!=null),"leads").sum)} ราย · ต้นทุน/รายชื่อ ${baht(ratio(agg(rows.filter(r=>r.salesLeads!=null),"spend").sum,sl.sum))}`:"ยังไม่มีข้อมูล"}</em></div></div>
+   <div class="tablewrap" style="margin-top:10px"><table><thead><tr><th>เป้าหมาย</th><th class="r">แคมเปญ-เดือน</th><th class="r">Spend</th><th class="r">ข้อความ</th><th class="r">Leads</th><th class="r">ส่งเซล</th><th class="r">Engagement</th><th class="r">ยอดขาย</th></tr></thead><tbody>${Object.entries(byObj).sort((x,y)=>(agg(y[1],"spend").sum||0)-(agg(x[1],"spend").sum||0)).map(([o,rs])=>`<tr><td>${esc(AR_OBJ[o]||o)}</td><td class="r num">${rs.length}</td><td class="r num">${baht(agg(rs,"spend").sum)}</td><td class="r num">${fmtN(agg(rs,"messages").sum)}</td><td class="r num">${fmtN(agg(rs,"leads").sum)}</td><td class="r num">${fmtN(agg(rs,"salesLeads").sum)}</td><td class="r num">${fmtK(agg(rs,"engagement").sum)}</td><td class="r num">${baht(agg(rs,"revenue").sum)}</td></tr>`).join("")}</tbody></table></div>${notes.length?`<div class="note" style="margin-top:10px">${notes.map(r=>`<div><b>${esc(r.campaign)}</b> (${thMonth(r.month)})${r.storeSales!=null?` · ยอดขายรวมร้าน ${baht(r.storeSales)} — แยกส่วนที่มาจากโฆษณาไม่ได้ จึงไม่นับใน Revenue/ROAS`:""}${r.note?` · ${esc(r.note)}`:""}</div>`).join("")}</div>`:""}</div>`)};
+// Cost ratios use only the spend of rows that report that metric (a row without clicks must not inflate CPC).
+adsSum=function(rows){const a=k=>agg(rows,k);const sp=a("spend"),cl=a("clicks"),ld=a("leads"),rv=a("revenue"),vr=a("verified");const spOf=k=>agg(rows.filter(r=>r[k]!=null&&r[k]!==""),"spend").sum;
+  return{sp,cl,ld,rv,vr,cpc:ratio(spOf("clicks"),cl.sum),cpl:ratio(spOf("leads"),ld.sum),roas:ratio(rv.sum,spOf("revenue")),roasV:ratio(vr.sum,spOf("verified"))}};
